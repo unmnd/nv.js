@@ -108,7 +108,21 @@ export class Node {
 
         // The topics database stores messages for communication between nodes.
         // The key is always the topic.
-        this._redisTopics = await this._connectRedis({
+        this._redisSub = await this._connectRedis({
+            host: redisHost,
+            port: redisPort,
+            db: 0,
+        });
+
+        // Handle received messages
+        this._redisSub.on(
+            "message",
+            this._handleSubscriptionCallback.bind(this)
+        );
+
+        // There are two identical Redis instances, as ioredis does not allow
+        // subscriptions on the same client as publishing.
+        this._redisPub = await this._connectRedis({
             host: redisHost,
             port: redisPort,
             db: 0,
@@ -173,6 +187,50 @@ export class Node {
                 await this.deleteParameters({});
             }
         }
+    }
+
+    async _registerNode() {
+        /*
+        Register the node with the network.
+        */
+
+        const renewNodeInformation = async () => {
+            this._redisNodes.set(
+                this.name,
+                JSON.stringify(await this.getNodeInformation()),
+                "EX",
+                10
+            );
+
+            if (this.nodeRegistered) {
+                setTimeout(renewNodeInformation, 5000);
+            }
+        };
+
+        // Register the node
+        await this._redisNodes.set(
+            this.name,
+            JSON.stringify(this.getNodeInformation()),
+            "EX",
+            10
+        );
+
+        this.nodeRegistered = true;
+        this.log.info(`Node ${this.name} registered`);
+
+        // Renew the node information every 5 seconds
+        renewNodeInformation();
+    }
+
+    _deregisterNode() {
+        /*
+        Deregister the node from the network.
+        */
+
+        this.nodeRegistered = false;
+        this._redisNodes.del(this.name);
+
+        this.log.info(`Node ${this.name} deregistered`);
     }
 
     async _connectRedis({ redisHost = "", port = 6379, db = 0 }) {
@@ -261,35 +319,53 @@ export class Node {
         );
     }
 
-    async _registerNode() {
+    _decodePubSubMessage(message) {
         /*
-        Register the node with the network.
+        Decode a message from the network.
+
+        @param message The message to decode.
+
+        @returns The decoded message.
         */
 
-        const renewNodeInformation = async () => {
-            this._redisNodes.set(
-                this.name,
-                JSON.stringify(await this.getNodeInformation()),
-                "EX",
-                10
-            );
+        try {
+            return JSON.parse(message);
+        } catch (e) {
+            return message;
+        }
+    }
 
-            setTimeout(renewNodeInformation, 5000);
-        };
+    _encodePubSubMessage(message) {
+        /*
+        Encode a message to be sent to the network.
 
-        // Register the node
-        await this._redisNodes.set(
-            this.name,
-            JSON.stringify(this.getNodeInformation()),
-            "EX",
-            10
-        );
+        @param message The message to encode.
 
-        // Renew the node information every 5 seconds
-        renewNodeInformation();
+        @returns The encoded message.
+        */
 
-        this.nodeRegistered = true;
-        this.log.info(`Node ${this.name} registered`);
+        try {
+            return JSON.stringify(message);
+        } catch (e) {
+            return message;
+        }
+    }
+
+    _handleSubscriptionCallback(channel, message) {
+        /*
+        Handle a message received from the network.
+
+        @param channel The channel the message was received on.
+        @param message The message received.
+        */
+
+        const callbacks = this._subscriptions[channel];
+
+        if (callbacks) {
+            callbacks.forEach((callback) => {
+                callback(message);
+            });
+        }
     }
 
     async nodeCondition() {
@@ -385,5 +461,43 @@ export class Node {
 
         // Execute the pipe
         return pipe.exec();
+    }
+
+    createSubscription(channel, callback) {
+        /*
+        ### Create a subscription.
+
+        @param {String} channel The channel to subscribe to.
+        @param {Function} callback The callback to call when a message is
+        received.
+        */
+
+        // Add the callback to the list of callbacks for the channel
+        if (!this._subscriptions[channel]) {
+            this._subscriptions[channel] = [];
+        }
+
+        this._subscriptions[channel].push(callback);
+
+        // Subscribe to the channel
+        this._redisSub.subscribe(channel);
+    }
+
+    publish(channel, message) {
+        /*
+        ### Publish a message to a channel.
+
+        @param {String} channel The channel to publish to.
+        @param {Object} message The message to publish.
+        */
+
+        // Update the publishers object
+        this._publishers[channel] = Date.now() / 1000;
+
+        // Encode the message
+        message = this._encodePubSubMessage(message);
+
+        // Publish the message
+        this._redisPub.publish(channel, message);
     }
 }

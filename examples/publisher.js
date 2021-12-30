@@ -1,20 +1,33 @@
-// const thing = import("../nv/src/index.js").then(main);
-
-// console.log(thing);
-
-// const Node = require("../nv/src/index.js").Node;
-
 import { Node } from "../nv/src/index.js";
 
 class Publisher extends Node {
-    // run() {
-    //     // Publish a random choice from the list of words
-    //     this.publish("/words", {
-    //         word: randomChoice(words),
-    //     });
-    // }
+    async init() {
+        await super.init();
+
+        this.counter = 0;
+
+        // Start publisher loop running to continuously publish messages
+        this.publish_hello_world();
+
+        // Alternatively, publish at any time
+        this.publish("another_topic", [
+            "Anything",
+            "you",
+            "want",
+            "to",
+            "publish",
+        ]);
+    }
+
+    publish_hello_world() {
+        this.publish("hello_world", "Hello World! " + this.counter++);
+
+        setTimeout(() => {
+            this.publish_hello_world();
+        }, 1000);
+    }
 }
 
-const node = new Publisher({ nodeName: "publisher" });
-
-await node.init();
+// Create the node
+const node = new Publisher({ nodeName: "publisher_node" });
+node.init();
