@@ -18,6 +18,7 @@
   },
   "homepage": "https://github.com/navvy-ai/framework.js#readme",
   "dependencies": {
+    "ioredis": "^4.28.2",
     "winston": "^3.3.3"
   }
 }

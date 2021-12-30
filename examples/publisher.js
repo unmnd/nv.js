@@ -8,11 +8,7 @@ import { Node } from "../nv/src/index.js";
 
 class Publisher extends Node {
     constructor() {
-        super({
-            skipRegistration: true,
-        });
-
-        console.log(this.nodeName);
+        super({});
     }
 
     // run() {
