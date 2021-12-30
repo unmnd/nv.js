@@ -429,3 +429,7 @@ export function generateName() {
 
     return randomChoice(adjectives) + "_" + randomChoice(nouns);
 }
+
+export function sleep(duration) {
+    return new Promise((resolve) => setTimeout(resolve, duration));
+}

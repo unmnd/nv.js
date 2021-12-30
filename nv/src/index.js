@@ -33,7 +33,7 @@ export class Node {
         applicable.
 
         Initialise a new node by inheriting this class. Ensure you call
-        `super().constructor(name)` in your new node.
+        `super().init(name)` in your new node.
 
         @param {String} name The name of the node.
         @param {Boolean} skipRegistration Whether to skip the registration of
@@ -65,21 +65,12 @@ export class Node {
             nodeName = nodeName;
         }
 
-        // // Check if the node should be started by calling this.nodeCondition()
-        // while (!this.nodeCondition()) {
-        //     this.log.info("Node condition not met, waiting...");
-        // }
-
-        this.log.debug(
-            `Initialising ${nodeName} using framework.js version nv ${version.__version__}`
-        );
-
         // Initialise parameters
         this.name = nodeName;
         this.nodeRegistered = false;
         this.skipRegistration = skipRegistration;
         this.stopped = false;
-        this._start_time = Date.now();
+        this._startTime = Date.now() / 1000;
 
         // The subscriptions dictionary is in the form of:
         // {
@@ -96,18 +87,92 @@ export class Node {
         // The services dictionary is used to keep track of exposed services, and
         // their unique topic names for calling.
         this._services = {};
+    }
+
+    async init() {
+        // Wait for the node condition to be met
+        try {
+            await this.nodeCondition();
+        } catch (e) {
+            this.log.error("Node condition failed, exiting");
+            throw e;
+        }
+
+        this.log.debug(
+            `Initialising ${this.name} using framework.js version nv ${version.__version__}`
+        );
 
         // Connect redis clients
-        // The topics database stores messages for communication between nodes.
-        // The key is always the topic.
         const redisHost = process.env.NV_REDIS_HOST;
         const redisPort = process.env.NV_REDIS_PORT || 6379;
 
-        this._redis_topics = this._connectRedis({
+        // The topics database stores messages for communication between nodes.
+        // The key is always the topic.
+        this._redisTopics = await this._connectRedis({
             host: redisHost,
             port: redisPort,
             db: 0,
         });
+
+        // The parameters database stores key-value parameters to be used for
+        // each node. The key is the node_name.parameter_name.
+        this._redisParameters = await this._connectRedis({
+            host: redisHost,
+            port: redisPort,
+            db: 1,
+        });
+
+        // The transforms database stores transformations between frames. The key
+        // is in the form <source_frame>:<target_frame>.
+        this._redisTransforms = await this._connectRedis({
+            host: redisHost,
+            port: redisPort,
+            db: 2,
+        });
+
+        // The nodes database stores up-to-date information about which nodes are
+        // active on the network. Each node is responsible for storing and
+        // keeping it's own information active.
+        this._redisNodes = await this._connectRedis({
+            host: redisHost,
+            port: redisPort,
+            db: 3,
+        });
+
+        if (this.skipRegistration) {
+            this.log.warning("Skipping node registration...");
+        } else {
+            // Check if the node exists
+            if (await this._redisNodes.exists(this.name)) {
+                this.log.info(
+                    `Node ${this.name} already exists, waiting to see if it disappears...`
+                );
+
+                // Wait up to 10 seconds for the node to disappear
+                let nodeExists = true;
+                for (let i = 0; i < 10; i++) {
+                    nodeExists = await this._redisNodes.exists(this.name);
+                    if (!nodeExists) {
+                        break;
+                    }
+                    await utils.sleep(1000);
+                }
+
+                if (nodeExists) {
+                    throw new Error(`Node ${this.name} still exists`);
+                }
+            }
+
+            // Register the node
+            this.log.info(`Registering node ${this.name}`);
+
+            await this._registerNode();
+
+            // Remove residual parameters if required
+            if (!this.keepOldParameters) {
+                await this.deleteParameters({});
+            }
+        }
     }
 
     async _connectRedis({ redisHost = "", port = 6379, db = 0 }) {
@@ -194,5 +259,131 @@ export class Node {
         throw new Error(
             `Could not connect to Redis at redis:${port} or localhost:${port}`
         );
+    }
+
+    async _registerNode() {
+        /*
+        Register the node with the network.
+        */
+
+        const renewNodeInformation = async () => {
+            this._redisNodes.set(
+                this.name,
+                JSON.stringify(await this.getNodeInformation()),
+                "EX",
+                10
+            );
+
+            setTimeout(renewNodeInformation, 5000);
+        };
+
+        // Register the node
+        await this._redisNodes.set(
+            this.name,
+            JSON.stringify(this.getNodeInformation()),
+            "EX",
+            10
+        );
+
+        // Renew the node information every 5 seconds
+        renewNodeInformation();
+
+        this.nodeRegistered = true;
+        this.log.info(`Node ${this.name} registered`);
+    }
+
+    async nodeCondition() {
+        /*
+        This function is called before any further node setup. It is used to
+        determine whether the node should be started or not.
+
+        It can be used to stop node creation until a desired condition is met,
+        for example that a device is connected.
+
+        When overwriting this function in a node, it should not depend on any
+        other node functions, as they will not be initialised yet.
+
+        @returns {Promise} A promise which resolves when the node condition is
+            met.
+        */
+        return Promise.resolve();
+    }
+
+    async checkNodeExists(nodeName) {
+        /*
+        Check if a node with the given name exists.
+
+        @param {String} nodeName The name of the node to check.
+
+        @return {Promise} A promise which resolves to true if the node exists,
+        or false if it does not.
+        */
+        return this._redisNodes.exists(nodeName);
+    }
+
+    async getNodeInformation(nodeName = null) {
+        /*
+        ### Return the node information dictionary.
+
+        If a node name is provided, the information for that node is returned.
+        If no node name is provided, the information for the current node is
+        returned.
+
+        @param {String} nodeName The name of the node to get information for.
+
+        @return {Object} The node information dictionary.
+        */
+
+        if (nodeName === null) {
+            return {
+                time_registered: this._startTime,
+                time_modified: Date.now() / 1000,
+                version: version.__version__ + "-js",
+                subscriptions: Object.keys(this._subscriptions),
+                publishers: this._publishers,
+                services: this._services,
+            };
+        } else {
+            return JSON.parse(await this._redisNodes.get(nodeName));
+        }
+    }
+
+    async deleteParameters({ names = null, nodeName = null }) {
+        /*
+        ### Delete multiple parameter values on the parameter server at once.
+
+        Supplying no arguments will delete all parameters on the current node.
+        Supplying only parameter names will use the current node.
+
+        @param {Array} names An array of parameter names to delete. If not
+        specified, all parameters on the selected node will be deleted. @param
+        {String} nodeName The name of the node to delete parameters on. If not
+        specified, the current node will be used.
+
+        @return {Promise} A promise which resolves when all the parameters have
+        been deleted.
+        */
+
+        if (!nodeName) {
+            nodeName = this.name;
+        }
+
+        // Create a pipe to send all updates at once
+        const pipe = this._redisParameters.pipeline();
+
+        // If no names are specified, delete all parameters on the node
+        if (names === null) {
+            // Get all parameters on the node
+            names = await this._redisParameters.keys(`${nodeName}.*`);
+        } else {
+            // Append the node name to each parameter name
+            names = names.map((name) => `${nodeName}.${name}`);
+        }
+
+        // Delete each parameter
+        names.forEach((name) => pipe.del(name));
+
+        // Execute the pipe
+        return pipe.exec();
     }
 }

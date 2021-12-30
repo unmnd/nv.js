@@ -7,10 +7,6 @@
 import { Node } from "../nv/src/index.js";
 
 class Publisher extends Node {
-    constructor() {
-        super({});
-    }
-
     // run() {
     //     // Publish a random choice from the list of words
     //     this.publish("/words", {
@@ -19,4 +15,6 @@ class Publisher extends Node {
     // }
 }
 
-const node = new Publisher();
+const node = new Publisher({ nodeName: "publisher" });
+
+await node.init();
