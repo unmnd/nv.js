@@ -17,33 +17,32 @@ import * as utils from "./utils.js";
 import * as version from "./version.js";
 
 export class Node {
+    /**
+     * The Node class is the main class of the nv framework. It is used to
+     * handle all interaction with the framework, including initialisation of
+     * nodes, subscribing to topics, publishing to topics, and creating timers.
+     *
+     * It is designed to be relatively compatible with the ROS framework,
+     * although some simplifications and improvements have been made where
+     * applicable.
+     *
+     * Initialise a new node by inheriting this class. Ensure you call
+     * `super().init(name)` in your new node.
+     *
+     * @param {String} [name] The name of the node.
+     * @param {Boolean} [skipRegistration] Whether to skip the registration of
+     *     the node with the server. This should not be used for normal nodes, but
+     *     is useful for commandline access.
+     * @param {String} [logLevel] The log level to use.
+     * @param {Boolean} [keepOldParameters] Whether to keep old parameters from
+     *     previous instances of this node.
+     */
     constructor({
         nodeName = null,
         skipRegistration = false,
         logLevel = null,
         keepOldParameters = false,
     }) {
-        /*
-        The Node class is the main class of the nv framework. It is used to
-        handle all interaction with the framework, including initialisation of
-        nodes, subscribing to topics, publishing to topics, and creating timers.
-
-        It is designed to be relatively compatible with the ROS framework,
-        although some simplifications and improvements have been made where
-        applicable.
-
-        Initialise a new node by inheriting this class. Ensure you call
-        `super().init(name)` in your new node.
-
-        @param {String} name The name of the node.
-        @param {Boolean} skipRegistration Whether to skip the registration of
-            the node with the server. This should not be used for normal nodes, but
-            is useful for commandline access.
-        @param {String} logLevel The log level to use.
-        @param {Boolean} keepOldParameters Whether to keep old parameters from
-            previous instances of this node.
-        */
-
         // Bind callbacks to gracefully exit the node on signal
         process.on("SIGINT", this._sigtermHandler.bind(this));
         process.on("SIGTERM", this._sigtermHandler.bind(this));
@@ -95,6 +94,10 @@ export class Node {
         this.timeouts = {};
     }
 
+    /**
+     * Initialise the node. This should be called immediately after
+     * inheriting the Node class.
+     */
     async init() {
         // Wait for the node condition to be met
         try {
@@ -116,8 +119,7 @@ export class Node {
 
         // The topics database stores messages for communication between nodes.
         // The key is always the topic.
-        this._redis["sub"] = await this._connectRedis({
-            host: redisHost,
+        this._redis["sub"] = await this._connectRedis(redisHost, {
             port: redisPort,
             db: 0,
         });
@@ -130,24 +132,21 @@ export class Node {
 
         // There are two identical Redis instances, as ioredis does not allow
         // subscriptions on the same client as publishing.
-        this._redis["pub"] = await this._connectRedis({
-            host: redisHost,
+        this._redis["pub"] = await this._connectRedis(redisHost, {
             port: redisPort,
             db: 0,
         });
 
         // The parameters database stores key-value parameters to be used for
         // each node. The key is the node_name.parameter_name.
-        this._redis["params"] = await this._connectRedis({
-            host: redisHost,
+        this._redis["params"] = await this._connectRedis(redisHost, {
             port: redisPort,
             db: 1,
         });
 
         // The transforms database stores transformations between frames. The key
         // is in the form <source_frame>:<target_frame>.
-        this._redis["transforms"] = await this._connectRedis({
-            host: redisHost,
+        this._redis["transforms"] = await this._connectRedis(redisHost, {
             port: redisPort,
             db: 2,
         });
@@ -155,8 +154,7 @@ export class Node {
         // The nodes database stores up-to-date information about which nodes are
         // active on the network. Each node is responsible for storing and
         // keeping it's own information active.
-        this._redis["nodes"] = await this._connectRedis({
-            host: redisHost,
+        this._redis["nodes"] = await this._connectRedis(redisHost, {
             port: redisPort,
             db: 3,
         });
@@ -197,11 +195,10 @@ export class Node {
         }
     }
 
+    /**
+     * Register the node with the network.
+     */
     async _registerNode() {
-        /*
-        Register the node with the network.
-        */
-
         const renewNodeInformation = async () => {
             if (!this.nodeRegistered || this.stopped) {
                 return;
@@ -238,28 +235,28 @@ export class Node {
         renewNodeInformation();
     }
 
+    /**
+     * Deregister the node from the network.
+     */
     _deregisterNode() {
-        /*
-        Deregister the node from the network.
-        */
-
         this.nodeRegistered = false;
         this._redis["nodes"].del(this.name);
 
         this.log.info(`Node ${this.name} deregistered`);
     }
 
-    async _connectRedis({ redisHost = "", port = 6379, db = 0 }) {
-        /*
-        Connect the Redis client to the database to allow messaging. It attempts
-        to find the host automatically on either localhost, or connecting to a
-        container named 'redis'.
-
-        @param {String} redisHost The host of the redis server.
-        @param {Number} port The port of the redis server.
-        @param {Number} db The database to connect to.
-        */
-
+    /**
+     * Connect the Redis client to the database to allow messaging. It attempts
+     * to find the host automatically on either localhost, or connecting to a
+     * container named 'redis'.
+     *
+     * @param {String} redisHost The host of the redis server.
+     * @param {Number} [port] The port of the redis server.
+     * @param {Number} [db] The database to connect to.
+     *
+     * @returns {Promise<RedisClient>} The connected Redis client.
+     */
+    async _connectRedis(redisHost, { port = 6379, db = 0 }) {
         const connect = async (options) => {
             this.log.info(
                 `Connecting to redis server at ${options.host}:${options.port}`
@@ -335,15 +332,14 @@ export class Node {
         );
     }
 
+    /**
+     * Decode a message from the network.
+     *
+     * @param {*} message The message to decode.
+     *
+     * @returns The decoded message.
+     */
     _decodePubSubMessage(message) {
-        /*
-        Decode a message from the network.
-
-        @param message The message to decode.
-
-        @returns The decoded message.
-        */
-
         try {
             return JSON.parse(message);
         } catch (e) {
@@ -351,15 +347,14 @@ export class Node {
         }
     }
 
+    /**
+     * Encode a message to be sent to the network.
+     *
+     * @param {*} message The message to encode.
+     *
+     * @returns The encoded message.
+     */
     _encodePubSubMessage(message) {
-        /*
-        Encode a message to be sent to the network.
-
-        @param message The message to encode.
-
-        @returns The encoded message.
-        */
-
         try {
             return JSON.stringify(message);
         } catch (e) {
@@ -367,14 +362,13 @@ export class Node {
         }
     }
 
+    /**
+     * Handle a message received from the network.
+     *
+     * @param channel The channel the message was received on.
+     * @param message The message received.
+     */
     _handleSubscriptionCallback(channel, message) {
-        /*
-        Handle a message received from the network.
-
-        @param channel The channel the message was received on.
-        @param message The message received.
-        */
-
         const callbacks = this._subscriptions[channel];
 
         if (callbacks) {
@@ -384,59 +378,55 @@ export class Node {
         }
     }
 
+    /**
+     * Handle termination signals to gracefully stop the node.
+     */
     _sigtermHandler() {
-        /*
-        Handle termination signals to gracefully stop the node.
-        */
-
         this.log.info("Received program termination signal; exiting...");
         this.destroyNode();
     }
 
+    /**
+     * This function is called before any further node setup. It is used to
+     * determine whether the node should be started or not.
+     *
+     * It can be used to stop node creation until a desired condition is met,
+     * for example that a device is connected.
+     *
+     * When overwriting this function in a node, it should not depend on any
+     * other node functions, as they will not be initialised yet.
+     *
+     * @returns {Promise} A promise which resolves when the node condition is
+     *     met.
+     */
     async nodeCondition() {
-        /*
-        This function is called before any further node setup. It is used to
-        determine whether the node should be started or not.
-
-        It can be used to stop node creation until a desired condition is met,
-        for example that a device is connected.
-
-        When overwriting this function in a node, it should not depend on any
-        other node functions, as they will not be initialised yet.
-
-        @returns {Promise} A promise which resolves when the node condition is
-            met.
-        */
         return Promise.resolve();
     }
 
+    /**
+     * Get the logger for this node.
+     *
+     * @returns The logger for this node.
+     */
     getLogger() {
-        /*
-        Get the logger for this node.
-
-        @returns The logger for this node.
-        */
-
         return this.log;
     }
 
+    /**
+     * Get the name of this node.
+     *
+     * @returns {String} The name of this node.
+     */
     getName() {
-        /*
-        Get the name of this node.
-
-        @returns {String} The name of this node.
-        */
-
         return this.name;
     }
 
+    /**
+     * Destroy the node.
+     *
+     * This will remove the node from the network and stop the node.
+     */
     destroyNode() {
-        /*
-        Destroy the node.
-
-        This will remove the node from the network and stop the node.
-        */
-
         this.log.info(`Destroying node ${this.name}`);
 
         // Remove the node from the list of nodes
@@ -456,19 +446,19 @@ export class Node {
         }
     }
 
-    async getNodeInformation(nodeName = null) {
-        /*
-        ### Return the node information dictionary.
-
-        If a node name is provided, the information for that node is returned.
-        If no node name is provided, the information for the current node is
-        returned.
-
-        @param {String} nodeName The name of the node to get information for.
-
-        @return {Object} The node information dictionary.
-        */
-
+    /**
+     * Return the node information dictionary.
+     *
+     * If a node name is provided, the information for that node is returned. If
+     * no node name is provided, the information for the current node is
+     * returned.
+     *
+     * @param {String} [nodeName] The name of the node to get
+     * information for.
+     *
+     * @return {Object} The node information dictionary.
+     */
+    async getNodeInformation({ nodeName = null } = {}) {
         if (nodeName === null) {
             return {
                 time_registered: this._startTime,
@@ -483,12 +473,12 @@ export class Node {
         }
     }
 
+    /**
+     * Get all nodes present in the network.
+     *
+     * @returns {Object} A dictionary of node information.
+     */
     async getNodes() {
-        /*
-        Get all nodes present in the network.
-
-        @returns {Object} A dictionary of node information.
-        */
         const nodeNames = await this.getNodesList();
 
         const nodes = {};
@@ -500,30 +490,34 @@ export class Node {
         return nodes;
     }
 
+    /**
+     * Get a list of all nodes present in the network.
+     *
+     * @returns {Array} A list of node names.
+     */
     async getNodesList() {
         return await this._redis["nodes"].keys("*");
     }
 
+    /**
+     * Check if a node with the given name exists.
+     *
+     * @param {String} nodeName The name of the node to check.
+     *
+     * @return {Promise} A promise which resolves to true if the node exists,
+     * or false if it does not.
+     */
     async checkNodeExists(nodeName) {
-        /*
-        Check if a node with the given name exists.
-
-        @param {String} nodeName The name of the node to check.
-
-        @return {Promise} A promise which resolves to true if the node exists,
-        or false if it does not.
-        */
         return this._redis["nodes"].exists(nodeName);
     }
 
+    /**
+     * Get all topics present in the network.
+     *
+     * @returns {Object} A dictionary containing all topics on the network, and
+     * the time of their most recent message.
+     */
     async getTopics() {
-        /*
-        Get all topics present in the network.
-
-        @returns {Object} A dictionary containing all topics on the network, and
-        the time of their most recent message.
-        */
-
         const topics = {};
 
         const nodes = await this.getNodes();
@@ -549,19 +543,18 @@ export class Node {
         return topics;
     }
 
+    /**
+     * Get a list of nodes which are subscribed to a specific topic.
+     *
+     * Note: This will not count nodes which have not been registered (such as
+     * the nv cli)! If you want to include these subscribers, use
+     * `getNumTopicSubscriptions` instead.
+     *
+     * @param {String} topic The topic to get subscribers for.
+     *
+     * @returns {Array} A list of nodes which are subscribed to the topic.
+     */
     async getTopicSubscriptions(topic) {
-        /*
-        Get a list of nodes which are subscribed to a specific topic.
-
-        Note: This will not count nodes which have not been registered (such as
-        the nv cli)! If you want to include these subscribers, use
-        `getNumTopicSubscriptions` instead.
-
-        @param {String} topic The topic to get subscribers for.
-
-        @returns {Array} A list of nodes which are subscribed to the topic.
-        */
-
         // First, get all registered nodes
         const nodes = await this.getNodes();
 
@@ -575,30 +568,28 @@ export class Node {
         return subscribers;
     }
 
+    /**
+     * Get the number of subscriptions to a specific topic,
+     * including nodes which are not registered with the network.
+     *
+     * @param {String} topic The topic to get the number of subscribers for.
+     *
+     * @returns {Number} The number of subscribers to the topic.
+     */
     async getNumTopicSubscriptions(topic) {
-        /*
-        Get the number of subscriptions to a specific topic,
-        including nodes which are not registered with the network.
-
-        @param {String} topic The topic to get the number of subscribers for.
-
-        @returns {Number} The number of subscribers to the topic.
-        */
-
         const subs = await this._redis["pub"].pubsub("numsub", topic);
 
         return subs[1];
     }
 
+    /**
+     * Create a subscription.
+     *
+     * @param {String} channel The channel to subscribe to.
+     * @param {Function} callback The callback to call when a message is
+     * received.
+     */
     createSubscription(channel, callback) {
-        /*
-        ### Create a subscription.
-
-        @param {String} channel The channel to subscribe to.
-        @param {Function} callback The callback to call when a message is
-        received.
-        */
-
         // Add the callback to the list of callbacks for the channel
         if (!this._subscriptions[channel]) {
             this._subscriptions[channel] = [];
@@ -610,14 +601,13 @@ export class Node {
         this._redis["sub"].subscribe(channel);
     }
 
+    /**
+     * Remove a subscription.
+     *
+     * @param {String} channel The channel to unsubscribe from.
+     * @param {Function} callback The callback to remove.
+     */
     destroySubscription(channel, callback) {
-        /*
-        Remove a subscription.
-
-        @param {String} channel The channel to unsubscribe from.
-        @param {Function} callback The callback to remove.
-        */
-
         // Remove the callback from the list of callbacks for the channel
         if (this._subscriptions[channel]) {
             this._subscriptions[channel] = this._subscriptions[channel].filter(
@@ -632,14 +622,13 @@ export class Node {
         }
     }
 
+    /**
+     * Publish a message to a channel.
+     *
+     * @param {String} channel The channel to publish to.
+     * @param {Object} message The message to publish.
+     */
     publish(channel, message) {
-        /*
-        Publish a message to a channel.
-
-        @param {String} channel The channel to publish to.
-        @param {Object} message The message to publish.
-        */
-
         // Update the publishers object
         this._publishers[channel] = Date.now() / 1000;
 
@@ -650,17 +639,16 @@ export class Node {
         this._redis["pub"].publish(channel, message);
     }
 
+    /**
+     * Get a parameter value from the parameter server.
+     *
+     * @param {String} name The name of the parameter to get.
+     * @param {String} [nodeName] The name of the node to get the parameter from.
+     *     If no node name is provided, the current node is used.
+     *
+     * @return {Promise} A promise which resolves to the parameter value.
+     */
     async getParameter(name, { nodeName = null } = {}) {
-        /*
-        Get a parameter value from the parameter server.
-
-        @param {String} name The name of the parameter to get.
-        @param {String} nodeName The name of the node to get the parameter from.
-            If no node name is provided, the current node is used.
-
-        @return {Promise} A promise which resolves to the parameter value.
-        */
-
         // If the node name is not provided, use the current node
         if (nodeName === null) {
             nodeName = this._nodeName;
@@ -678,31 +666,30 @@ export class Node {
         return JSON.parse(param)["value"];
     }
 
+    /**
+     * Get all parameters for a specific node, matching a pattern.
+     *
+     * @param {String} [nodeName] The name of the node to get parameters for.
+     *     If no node name is provided, the current node is used.
+     * @param {String} [match] The pattern to match parameters against.
+     *     Defaults to "*", which matches all parameters.
+     *
+     * @return {Promise} A promise which resolves to a dictionary of
+     * parameters.
+     *
+     * @example
+     * // Get all parameters for the current node
+     * const params = await nv.getParameters();
+     *
+     * // Get all parameters for the node 'node1'
+     * const params = await nv.getParameters("node1");
+     *
+     * // Get all parameters for the node 'node1' matching 'foo*'
+     * const params = await nv.getParameters("node1", "foo*");
+     */
     async getParameters(
         { nodeName = null, match = "*" } = { nodeName: null, match: "*" }
     ) {
-        /*
-        Get all parameters for a specific node, matching a pattern.
-
-        @param {String} nodeName The name of the node to get parameters for.
-            If no node name is provided, the current node is used.
-        @param {String} match The pattern to match parameters against.
-            Defaults to "*", which matches all parameters.
-
-        @return {Promise} A promise which resolves to a dictionary of
-        parameters.
-
-        @example
-        // Get all parameters for the current node
-        const params = await nv.getParameters();
-
-        // Get all parameters for the node 'node1'
-        const params = await nv.getParameters("node1");
-
-        // Get all parameters for the node 'node1' matching 'foo*'
-        const params = await nv.getParameters("node1", "foo*");
-        */
-
         // If the node name is not provided, use the current node
         if (nodeName === null) {
             nodeName = this._nodeName;
@@ -723,17 +710,16 @@ export class Node {
         return parameters;
     }
 
+    /**
+     * Get a parameter description from the parameter server.
+     *
+     * @param {String} name The name of the parameter to get.
+     * @param {String} [nodeName] The name of the node to get the parameter from.
+     *     If no node name is provided, the current node is used.
+     *
+     * @return {Promise} A promise which resolves to the parameter description.
+     */
     async getParameterDescription(name, { nodeName = null } = {}) {
-        /**
-        Get a parameter description from the parameter server.
-
-        @param {String} name The name of the parameter to get.
-        @param {String} [nodeName] The name of the node to get the parameter from.
-            If no node name is provided, the current node is used.
-
-        @return {Promise} A promise which resolves to the parameter description.
-        */
-
         // If the node name is not provided, use the current node
         if (nodeName === null) {
             nodeName = this._nodeName;
@@ -751,30 +737,27 @@ export class Node {
         return JSON.parse(param)["description"];
     }
 
+    /**
+     * Set a parameter value on the parameter server.
+     *
+     * @param {String} name The name of the parameter to set.
+     * @param value The value to set the parameter to.
+     * @param {String} [nodeName] The name of the node to set the parameter on.
+     *     If no node name is provided, the current node is used.
+     * @param {String} [description] The description of the parameter.
+     *
+     * @example
+     * // Set the parameter 'foo' to the value 'bar' on the current node
+     * nv.setParameter('foo', 'bar');
+     *
+     * // Set the parameter 'foo' to the value 'bar' on the node 'node1'
+     * nv.setParameter(
+     *    'foo',
+     *    'bar',
+     *    { nodeName: 'node1' }
+     * );
+     */
     setParameter(name, value, { nodeName = null, description = null } = {}) {
-        /*
-        Set a parameter value on the parameter server.
-
-        @param {String} name The name of the parameter to set.
-        @param value The value to set the parameter to.
-        @param {String} nodeName The name of the node to set the parameter on.
-            If no node name is provided, the current node is used.
-        @param {String} description The description of the parameter.
-
-        @example
-        // Set the parameter 'foo' to the value 'bar' on the current node
-        nv.setParameter({ name: 'foo', value: 'bar' });
-
-        // Set the parameter 'foo' to the value 'bar' on the node 'node1'
-        nv.setParameter({
-            name: 'foo',
-            value: 'bar',
-            nodeName: 'node1',
-            description: 'This is a parameter'
-        });
-
-        */
-
         // If the node name is not provided, use the current node
         if (nodeName === null) {
             nodeName = this._nodeName;
@@ -790,22 +773,21 @@ export class Node {
         );
     }
 
+    /**
+     * Delete multiple parameter values on the parameter server at once.
+     *
+     * Supplying no arguments will delete all parameters on the current node.
+     * Supplying only parameter names will use the current node.
+     *
+     * @param {Array} [names] An array of parameter names to delete. If not
+     * specified, all parameters on the selected node will be deleted.
+     * @param {String} [nodeName] The name of the node to delete parameters on. If not
+     * specified, the current node will be used.
+     *
+     * @return {Promise} A promise which resolves when all the parameters have
+     * been deleted.
+     */
     async deleteParameters({ names = null, nodeName = null } = {}) {
-        /*
-        ### Delete multiple parameter values on the parameter server at once.
-
-        Supplying no arguments will delete all parameters on the current node.
-        Supplying only parameter names will use the current node.
-
-        @param {Array} names An array of parameter names to delete. If not
-        specified, all parameters on the selected node will be deleted. @param
-        {String} nodeName The name of the node to delete parameters on. If not
-        specified, the current node will be used.
-
-        @return {Promise} A promise which resolves when all the parameters have
-        been deleted.
-        */
-
         if (!nodeName) {
             nodeName = this.name;
         }
