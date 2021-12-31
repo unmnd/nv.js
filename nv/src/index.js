@@ -590,6 +590,66 @@ export class Node {
         return subs[1];
     }
 
+    createSubscription(channel, callback) {
+        /*
+        ### Create a subscription.
+
+        @param {String} channel The channel to subscribe to.
+        @param {Function} callback The callback to call when a message is
+        received.
+        */
+
+        // Add the callback to the list of callbacks for the channel
+        if (!this._subscriptions[channel]) {
+            this._subscriptions[channel] = [];
+        }
+
+        this._subscriptions[channel].push(callback);
+
+        // Subscribe to the channel
+        this._redis["sub"].subscribe(channel);
+    }
+
+    destroySubscription(channel, callback) {
+        /*
+        Remove a subscription.
+
+        @param {String} channel The channel to unsubscribe from.
+        @param {Function} callback The callback to remove.
+        */
+
+        // Remove the callback from the list of callbacks for the channel
+        if (this._subscriptions[channel]) {
+            this._subscriptions[channel] = this._subscriptions[channel].filter(
+                (cb) => cb !== callback
+            );
+        }
+
+        // If there are no more callbacks for the channel, unsubscribe from it
+        if (this._subscriptions[channel].length === 0) {
+            this._redis["sub"].unsubscribe(channel);
+            delete this._subscriptions[channel];
+        }
+    }
+
+    publish(channel, message) {
+        /*
+        Publish a message to a channel.
+
+        @param {String} channel The channel to publish to.
+        @param {Object} message The message to publish.
+        */
+
+        // Update the publishers object
+        this._publishers[channel] = Date.now() / 1000;
+
+        // Encode the message
+        message = this._encodePubSubMessage(message);
+
+        // Publish the message
+        this._redis["pub"].publish(channel, message);
+    }
+
     async deleteParameters({ names = null, nodeName = null }) {
         /*
         ### Delete multiple parameter values on the parameter server at once.
@@ -627,43 +687,5 @@ export class Node {
 
         // Execute the pipe
         return pipe.exec();
-    }
-
-    createSubscription(channel, callback) {
-        /*
-        ### Create a subscription.
-
-        @param {String} channel The channel to subscribe to.
-        @param {Function} callback The callback to call when a message is
-        received.
-        */
-
-        // Add the callback to the list of callbacks for the channel
-        if (!this._subscriptions[channel]) {
-            this._subscriptions[channel] = [];
-        }
-
-        this._subscriptions[channel].push(callback);
-
-        // Subscribe to the channel
-        this._redis["sub"].subscribe(channel);
-    }
-
-    publish(channel, message) {
-        /*
-        ### Publish a message to a channel.
-
-        @param {String} channel The channel to publish to.
-        @param {Object} message The message to publish.
-        */
-
-        // Update the publishers object
-        this._publishers[channel] = Date.now() / 1000;
-
-        // Encode the message
-        message = this._encodePubSubMessage(message);
-
-        // Publish the message
-        this._redis["pub"].publish(channel, message);
     }
 }
