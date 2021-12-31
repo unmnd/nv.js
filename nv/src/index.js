@@ -549,6 +549,32 @@ export class Node {
         return topics;
     }
 
+    async getTopicSubscriptions(topic) {
+        /*
+        Get a list of nodes which are subscribed to a specific topic.
+
+        Note: This will not count nodes which have not been registered (such as
+        the nv cli)! If you want to include these subscribers, use
+        `getNumTopicSubscriptions` instead.
+
+        @param {String} topic The topic to get subscribers for.
+
+        @returns {Array} A list of nodes which are subscribed to the topic.
+        */
+
+        // First, get all registered nodes
+        const nodes = await this.getNodes();
+
+        // Then, filter out the nodes which are not subscribed to the topic
+        const subscribers = Object.keys(nodes).filter((nodeName) => {
+            const node = nodes[nodeName];
+
+            return node.subscriptions.includes(topic);
+        });
+
+        return subscribers;
+    }
+
     async deleteParameters({ names = null, nodeName = null }) {
         /*
         ### Delete multiple parameter values on the parameter server at once.
