@@ -456,18 +456,6 @@ export class Node {
         }
     }
 
-    async checkNodeExists(nodeName) {
-        /*
-        Check if a node with the given name exists.
-
-        @param {String} nodeName The name of the node to check.
-
-        @return {Promise} A promise which resolves to true if the node exists,
-        or false if it does not.
-        */
-        return this._redis["nodes"].exists(nodeName);
-    }
-
     async getNodeInformation(nodeName = null) {
         /*
         ### Return the node information dictionary.
@@ -493,6 +481,39 @@ export class Node {
         } else {
             return JSON.parse(await this._redis["nodes"].get(nodeName));
         }
+    }
+
+    async getNodes() {
+        /*
+        Get all nodes present in the network.
+
+        @returns {Object} A dictionary of node information.
+        */
+        const nodeNames = await this.getNodesList();
+
+        const nodes = {};
+
+        for (const nodeName of nodeNames) {
+            nodes[nodeName] = await this.getNodeInformation(nodeName);
+        }
+
+        return nodes;
+    }
+
+    async getNodesList() {
+        return await this._redis["nodes"].keys("*");
+    }
+
+    async checkNodeExists(nodeName) {
+        /*
+        Check if a node with the given name exists.
+
+        @param {String} nodeName The name of the node to check.
+
+        @return {Promise} A promise which resolves to true if the node exists,
+        or false if it does not.
+        */
+        return this._redis["nodes"].exists(nodeName);
     }
 
     async deleteParameters({ names = null, nodeName = null }) {
