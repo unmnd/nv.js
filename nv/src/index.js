@@ -516,6 +516,39 @@ export class Node {
         return this._redis["nodes"].exists(nodeName);
     }
 
+    async getTopics() {
+        /*
+        Get all topics present in the network.
+
+        @returns {Object} A dictionary containing all topics on the network, and
+        the time of their most recent message.
+        */
+
+        const topics = {};
+
+        const nodes = await this.getNodes();
+
+        // Loop over each node and add their publishers to the list. If the topic
+        // already exists, the most recent publish time is used.
+        for (const nodeName in nodes) {
+            const node = nodes[nodeName];
+
+            for (const [topic, lastPublished] of Object.entries(
+                node.publishers
+            )) {
+                if (topic in topics) {
+                    if (topics[topic] < lastPublished) {
+                        topics[topic] = lastPublished;
+                    }
+                } else {
+                    topics[topic] = lastPublished;
+                }
+            }
+        }
+
+        return topics;
+    }
+
     async deleteParameters({ names = null, nodeName = null }) {
         /*
         ### Delete multiple parameter values on the parameter server at once.
