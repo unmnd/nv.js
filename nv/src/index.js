@@ -651,7 +651,7 @@ export class Node {
     async getParameter(name, { nodeName = null } = {}) {
         // If the node name is not provided, use the current node
         if (nodeName === null) {
-            nodeName = this._nodeName;
+            nodeName = this.name;
         }
 
         // Get the parameter from the parameter server
@@ -692,7 +692,7 @@ export class Node {
     ) {
         // If the node name is not provided, use the current node
         if (nodeName === null) {
-            nodeName = this._nodeName;
+            nodeName = this.name;
         }
 
         const parameters = {};
@@ -722,7 +722,7 @@ export class Node {
     async getParameterDescription(name, { nodeName = null } = {}) {
         // If the node name is not provided, use the current node
         if (nodeName === null) {
-            nodeName = this._nodeName;
+            nodeName = this.name;
         }
 
         // Get the parameter from the parameter server
@@ -748,29 +748,105 @@ export class Node {
      *
      * @example
      * // Set the parameter 'foo' to the value 'bar' on the current node
-     * nv.setParameter('foo', 'bar');
+     * await nv.setParameter('foo', 'bar');
      *
      * // Set the parameter 'foo' to the value 'bar' on the node 'node1'
-     * nv.setParameter(
+     * await nv.setParameter(
      *    'foo',
      *    'bar',
      *    { nodeName: 'node1' }
      * );
      */
-    setParameter(name, value, { nodeName = null, description = null } = {}) {
+    async setParameter(
+        name,
+        value,
+        { nodeName = null, description = null } = {}
+    ) {
         // If the node name is not provided, use the current node
         if (nodeName === null) {
-            nodeName = this._nodeName;
+            nodeName = this.name;
         }
 
         // Set the parameter on the parameter server
-        this._redis["params"].set(
+        return this._redis["params"].set(
             `${nodeName}.${name}`,
             JSON.stringify({
                 value,
                 description,
             })
         );
+    }
+
+    /**
+     * Set multiple parameter values on the parameter server at once.
+     *
+     * @param {Object[]} parameters A list of parameter objects.
+     * @param {String} parameters[].name The name of the parameter to set.
+     * @param parameters[].value The value to set the parameter to.
+     * @param {String} [parameters[].nodeName] The name of the node to set the parameter on.
+     * If no node name is provided, the current node is used.
+     * @param {String} [parameters[].description] The description of the parameter.
+     *
+     * @example
+     * // Set the parameters 'foo' and 'bar' to the values 'bar' and 'baz'
+     * // on the current node
+     * await nv.setParameters([
+     *     { name: 'foo', value: 'bar' },
+     *     { name: 'bar', value: 'baz' }
+     * ]);
+     */
+    async setParameters(parameters) {
+        // Ensure all parameters have the required keys
+        for (const parameter of parameters) {
+            if (!parameter.nodeName) {
+                parameter.nodeName = this.name;
+            }
+
+            if (!parameter.description) {
+                parameter.description = null;
+            }
+        }
+
+        // Create a pipe to send all updates at once
+        const pipe = this._redis["params"].pipeline();
+
+        // Loop over each parameter and set it on the parameter server
+        for (const parameter of parameters) {
+            pipe.set(
+                `${parameter.nodeName}.${parameter.name}`,
+                JSON.stringify({
+                    value: parameter.value,
+                    description: parameter.description,
+                })
+            );
+        }
+
+        // Execute the pipe
+        return pipe.exec();
+    }
+
+    /**
+     * Delete a parameter from the parameter server.
+     *
+     * @param {String} name The name of the parameter to delete.
+     * @param {String} [nodeName] The name of the node to delete the parameter from.
+     *    If no node name is provided, the current node is used.
+     *
+     * @example
+     * // Delete the parameter 'foo' from the current node
+     * nv.deleteParameter('foo');
+     *
+     * // Delete the parameter 'foo' from the node 'node1'
+     * nv.deleteParameter('foo', { nodeName: 'node1' });
+     */
+    async deleteParameter(name, { nodeName = null } = {}) {
+        // If the node name is not provided, use the current node
+        if (nodeName === null) {
+            nodeName = this.name;
+        }
+
+        // Delete the parameter from the parameter server
+        return this._redis["params"].del(`${nodeName}.${name}`);
     }
 
     /**
