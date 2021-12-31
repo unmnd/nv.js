@@ -650,7 +650,147 @@ export class Node {
         this._redis["pub"].publish(channel, message);
     }
 
-    async deleteParameters({ names = null, nodeName = null }) {
+    async getParameter(name, { nodeName = null } = {}) {
+        /*
+        Get a parameter value from the parameter server.
+
+        @param {String} name The name of the parameter to get.
+        @param {String} nodeName The name of the node to get the parameter from.
+            If no node name is provided, the current node is used.
+
+        @return {Promise} A promise which resolves to the parameter value.
+        */
+
+        // If the node name is not provided, use the current node
+        if (nodeName === null) {
+            nodeName = this._nodeName;
+        }
+
+        // Get the parameter from the parameter server
+        const param = await this._redis["params"].get(`${nodeName}.${name}`);
+
+        // If the parameter is not found, return null
+        if (param === null) {
+            return null;
+        }
+
+        // Extract the value from the parameter
+        return JSON.parse(param)["value"];
+    }
+
+    async getParameters(
+        { nodeName = null, match = "*" } = { nodeName: null, match: "*" }
+    ) {
+        /*
+        Get all parameters for a specific node, matching a pattern.
+
+        @param {String} nodeName The name of the node to get parameters for.
+            If no node name is provided, the current node is used.
+        @param {String} match The pattern to match parameters against.
+            Defaults to "*", which matches all parameters.
+
+        @return {Promise} A promise which resolves to a dictionary of
+        parameters.
+
+        @example
+        // Get all parameters for the current node
+        const params = await nv.getParameters();
+
+        // Get all parameters for the node 'node1'
+        const params = await nv.getParameters("node1");
+
+        // Get all parameters for the node 'node1' matching 'foo*'
+        const params = await nv.getParameters("node1", "foo*");
+        */
+
+        // If the node name is not provided, use the current node
+        if (nodeName === null) {
+            nodeName = this._nodeName;
+        }
+
+        const parameters = {};
+
+        // Get all keys which start with the node name
+        const keys = await this._redis["params"].keys(`${nodeName}.${match}`);
+
+        // Loop over each key and extract the parameter name and value
+        for (const key of keys) {
+            const [, name] = key.split(".");
+
+            parameters[name] = await this.getParameter(name, nodeName);
+        }
+
+        return parameters;
+    }
+
+    async getParameterDescription(name, { nodeName = null } = {}) {
+        /**
+        Get a parameter description from the parameter server.
+
+        @param {String} name The name of the parameter to get.
+        @param {String} [nodeName] The name of the node to get the parameter from.
+            If no node name is provided, the current node is used.
+
+        @return {Promise} A promise which resolves to the parameter description.
+        */
+
+        // If the node name is not provided, use the current node
+        if (nodeName === null) {
+            nodeName = this._nodeName;
+        }
+
+        // Get the parameter from the parameter server
+        const param = await this._redis["params"].get(`${nodeName}.${name}`);
+
+        // If the parameter is not found, return null
+        if (param === null) {
+            return null;
+        }
+
+        // Extract the value from the parameter
+        return JSON.parse(param)["description"];
+    }
+
+    setParameter(name, value, { nodeName = null, description = null } = {}) {
+        /*
+        Set a parameter value on the parameter server.
+
+        @param {String} name The name of the parameter to set.
+        @param value The value to set the parameter to.
+        @param {String} nodeName The name of the node to set the parameter on.
+            If no node name is provided, the current node is used.
+        @param {String} description The description of the parameter.
+
+        @example
+        // Set the parameter 'foo' to the value 'bar' on the current node
+        nv.setParameter({ name: 'foo', value: 'bar' });
+
+        // Set the parameter 'foo' to the value 'bar' on the node 'node1'
+        nv.setParameter({
+            name: 'foo',
+            value: 'bar',
+            nodeName: 'node1',
+            description: 'This is a parameter'
+        });
+
+        */
+
+        // If the node name is not provided, use the current node
+        if (nodeName === null) {
+            nodeName = this._nodeName;
+        }
+
+        // Set the parameter on the parameter server
+        this._redis["params"].set(
+            `${nodeName}.${name}`,
+            JSON.stringify({
+                value,
+                description,
+            })
+        );
+    }
+
+    async deleteParameters({ names = null, nodeName = null } = {}) {
         /*
         ### Delete multiple parameter values on the parameter server at once.
 
