@@ -575,6 +575,21 @@ export class Node {
         return subscribers;
     }
 
+    async getNumTopicSubscriptions(topic) {
+        /*
+        Get the number of subscriptions to a specific topic,
+        including nodes which are not registered with the network.
+
+        @param {String} topic The topic to get the number of subscribers for.
+
+        @returns {Number} The number of subscribers to the topic.
+        */
+
+        const subs = await this._redis["pub"].pubsub("numsub", topic);
+
+        return subs[1];
+    }
+
     async deleteParameters({ names = null, nodeName = null }) {
         /*
         ### Delete multiple parameter values on the parameter server at once.
