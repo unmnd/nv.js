@@ -18,7 +18,7 @@ import * as version from "./version.js";
 
 export class Node {
     constructor({
-        nodeName = "",
+        nodeName = null,
         skipRegistration = false,
         logLevel = null,
         keepOldParameters = false,
@@ -44,7 +44,16 @@ export class Node {
             previous instances of this node.
         */
 
-        // Setup logger
+        // Bind callbacks to gracefully exit the node on signal
+        process.on("SIGINT", this._sigtermHandler.bind(this));
+        process.on("SIGTERM", this._sigtermHandler.bind(this));
+
+        // Generate a random node name if none is provided
+        if (nodeName === null) {
+            nodeName = utils.generateName();
+        }
+
+        // Initialise logger
         this.log = winston.createLogger({
             level: logLevel || "debug",
             format: winston.format.combine(
@@ -57,13 +66,6 @@ export class Node {
             ),
             transports: [new winston.transports.Console()],
         });
-
-        // Setup node name
-        if (nodeName === "") {
-            nodeName = utils.generateName();
-        } else {
-            nodeName = nodeName;
-        }
 
         // Initialise parameters
         this.name = nodeName;
@@ -87,6 +89,10 @@ export class Node {
         // The services dictionary is used to keep track of exposed services, and
         // their unique topic names for calling.
         this._services = {};
+
+        // The timeouts object is used to keep track of timers, where they can
+        // all be stopped automatically at node termination.
+        this.timeouts = {};
     }
 
     async init() {
@@ -106,23 +112,25 @@ export class Node {
         const redisHost = process.env.NV_REDIS_HOST;
         const redisPort = process.env.NV_REDIS_PORT || 6379;
 
+        this._redis = {};
+
         // The topics database stores messages for communication between nodes.
         // The key is always the topic.
-        this._redisSub = await this._connectRedis({
+        this._redis["sub"] = await this._connectRedis({
             host: redisHost,
             port: redisPort,
             db: 0,
         });
 
         // Handle received messages
-        this._redisSub.on(
+        this._redis["sub"].on(
             "message",
             this._handleSubscriptionCallback.bind(this)
         );
 
         // There are two identical Redis instances, as ioredis does not allow
         // subscriptions on the same client as publishing.
-        this._redisPub = await this._connectRedis({
+        this._redis["pub"] = await this._connectRedis({
             host: redisHost,
             port: redisPort,
             db: 0,
@@ -130,7 +138,7 @@ export class Node {
 
         // The parameters database stores key-value parameters to be used for
         // each node. The key is the node_name.parameter_name.
-        this._redisParameters = await this._connectRedis({
+        this._redis["params"] = await this._connectRedis({
             host: redisHost,
             port: redisPort,
             db: 1,
@@ -138,7 +146,7 @@ export class Node {
 
         // The transforms database stores transformations between frames. The key
         // is in the form <source_frame>:<target_frame>.
-        this._redisTransforms = await this._connectRedis({
+        this._redis["transforms"] = await this._connectRedis({
             host: redisHost,
             port: redisPort,
             db: 2,
@@ -147,7 +155,7 @@ export class Node {
         // The nodes database stores up-to-date information about which nodes are
         // active on the network. Each node is responsible for storing and
         // keeping it's own information active.
-        this._redisNodes = await this._connectRedis({
+        this._redis["nodes"] = await this._connectRedis({
             host: redisHost,
             port: redisPort,
             db: 3,
@@ -157,7 +165,7 @@ export class Node {
             this.log.warning("Skipping node registration...");
         } else {
             // Check if the node exists
-            if (await this._redisNodes.exists(this.name)) {
+            if (await this._redis["nodes"].exists(this.name)) {
                 this.log.info(
                     `Node ${this.name} already exists, waiting to see if it disappears...`
                 );
@@ -165,7 +173,7 @@ export class Node {
                 // Wait up to 10 seconds for the node to disappear
                 let nodeExists = true;
                 for (let i = 0; i < 10; i++) {
-                    nodeExists = await this._redisNodes.exists(this.name);
+                    nodeExists = await this._redis["nodes"].exists(this.name);
                     if (!nodeExists) {
                         break;
                     }
@@ -195,20 +203,28 @@ export class Node {
         */
 
         const renewNodeInformation = async () => {
-            this._redisNodes.set(
+            if (!this.nodeRegistered || this.stopped) {
+                return;
+            }
+
+            this._redis["nodes"].set(
                 this.name,
                 JSON.stringify(await this.getNodeInformation()),
                 "EX",
                 10
             );
 
-            if (this.nodeRegistered) {
-                setTimeout(renewNodeInformation, 5000);
-            }
+            // Assigning the timer to a variable allows it to be cancelled
+            // immediately on shutdown, instead of waiting up to 5 seconds for
+            // the next loop.
+            this.timeouts["renew_node_information"] = setTimeout(
+                renewNodeInformation,
+                5000
+            );
         };
 
         // Register the node
-        await this._redisNodes.set(
+        await this._redis["nodes"].set(
             this.name,
             JSON.stringify(this.getNodeInformation()),
             "EX",
@@ -228,7 +244,7 @@ export class Node {
         */
 
         this.nodeRegistered = false;
-        this._redisNodes.del(this.name);
+        this._redis["nodes"].del(this.name);
 
         this.log.info(`Node ${this.name} deregistered`);
     }
@@ -368,6 +384,15 @@ export class Node {
         }
     }
 
+    _sigtermHandler() {
+        /*
+        Handle termination signals to gracefully stop the node.
+        */
+
+        this.log.info("Received program termination signal; exiting...");
+        this.destroyNode();
+    }
+
     async nodeCondition() {
         /*
         This function is called before any further node setup. It is used to
@@ -385,6 +410,52 @@ export class Node {
         return Promise.resolve();
     }
 
+    getLogger() {
+        /*
+        Get the logger for this node.
+
+        @returns The logger for this node.
+        */
+
+        return this.log;
+    }
+
+    getName() {
+        /*
+        Get the name of this node.
+
+        @returns {String} The name of this node.
+        */
+
+        return this.name;
+    }
+
+    destroyNode() {
+        /*
+        Destroy the node.
+
+        This will remove the node from the network and stop the node.
+        */
+
+        this.log.info(`Destroying node ${this.name}`);
+
+        // Remove the node from the list of nodes
+        this._deregisterNode();
+
+        // Stop any timers or services running
+        this.stopped = true;
+        for (const [key, t] of Object.entries(this.timeouts)) {
+            this.log.debug(`Cancelling timeout: ${key}`);
+            clearTimeout(t);
+        }
+
+        // Terminate all redis instances
+        for (const [key, r] of Object.entries(this._redis)) {
+            this.log.debug(`Closing redis instance: ${key}`);
+            r.disconnect();
+        }
+    }
+
     async checkNodeExists(nodeName) {
         /*
         Check if a node with the given name exists.
@@ -394,7 +465,7 @@ export class Node {
         @return {Promise} A promise which resolves to true if the node exists,
         or false if it does not.
         */
-        return this._redisNodes.exists(nodeName);
+        return this._redis["nodes"].exists(nodeName);
     }
 
     async getNodeInformation(nodeName = null) {
@@ -420,7 +491,7 @@ export class Node {
                 services: this._services,
             };
         } else {
-            return JSON.parse(await this._redisNodes.get(nodeName));
+            return JSON.parse(await this._redis["nodes"].get(nodeName));
         }
     }
 
@@ -445,12 +516,12 @@ export class Node {
         }
 
         // Create a pipe to send all updates at once
-        const pipe = this._redisParameters.pipeline();
+        const pipe = this._redis["params"].pipeline();
 
         // If no names are specified, delete all parameters on the node
         if (names === null) {
             // Get all parameters on the node
-            names = await this._redisParameters.keys(`${nodeName}.*`);
+            names = await this._redis["params"].keys(`${nodeName}.*`);
         } else {
             // Append the node name to each parameter name
             names = names.map((name) => `${nodeName}.${name}`);
@@ -480,7 +551,7 @@ export class Node {
         this._subscriptions[channel].push(callback);
 
         // Subscribe to the channel
-        this._redisSub.subscribe(channel);
+        this._redis["sub"].subscribe(channel);
     }
 
     publish(channel, message) {
@@ -498,6 +569,6 @@ export class Node {
         message = this._encodePubSubMessage(message);
 
         // Publish the message
-        this._redisPub.publish(channel, message);
+        this._redis["pub"].publish(channel, message);
     }
 }

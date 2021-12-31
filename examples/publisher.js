@@ -22,7 +22,9 @@ class Publisher extends Node {
     publish_hello_world() {
         this.publish("hello_world", "Hello World! " + this.counter++);
 
-        setTimeout(() => {
+        // Add timeouts to the `timeouts` object, and they will be automatically
+        // stopped on node termination.
+        this.timeouts["publish_hello_world"] = setTimeout(() => {
             this.publish_hello_world();
         }, 1000);
     }
