@@ -1,0 +1,25 @@
+{
+    "name": "nv",
+    "version": "1.0.9",
+    "description": "A JavaScript-based robot-focused framework.",
+    "type": "module",
+    "main": "./src/index.js",
+    "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/navvy-ai/framework.js.git"
+    },
+    "author": {
+        "name": "Callum Morrison",
+        "email": "callum@unmnd.com",
+        "url": "https://xdgfx.com"
+    },
+    "license": "UNLICENSED",
+    "homepage": "navvy.ai",
+    "dependencies": {
+        "ioredis": "^4.28.2",
+        "winston": "^3.3.3"
+    }
+}
