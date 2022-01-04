@@ -71,6 +71,33 @@ class ParameterExamples extends Node {
             "Parameter from config.json: " +
                 (await this.getParameter("param1", { nodeName: "node1" }))
         );
+
+        // If you only want to load the parameters but not set them on the
+        // parameter server, you can use `loadParametersFromFile`
+        const parameters = await this.loadParametersFromFile(
+            fileURLToPath(
+                path.join(path.dirname(import.meta.url), "config.json")
+            )
+        );
+        this.log.info(
+            "Parameter from config.json: " + parameters["node1"]["param1"]
+        );
+
+        // You can get all parameters for a node with `getParameters`
+        this.log.info(
+            `All parameters for this node: ${JSON.stringify(
+                await this.getParameters()
+            )}`
+        );
+
+        // Finally you can remove parameters from the parameter server
+        await this.deleteParameter("example_parameter");
+        this.log.info(
+            `Removed parameter: ${await this.getParameter("example_parameter")}`
+        );
+
+        // You can remove all parameters from a node at once
+        await this.deleteParameters();
     }
 }
 
