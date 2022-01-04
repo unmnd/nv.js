@@ -1,4 +1,4 @@
-import { Node } from "../nv/src/index.js";
+import { Node } from "nv";
 
 class Subscriber extends Node {
     subscriber_callback(msg) {

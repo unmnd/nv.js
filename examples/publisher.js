@@ -1,4 +1,4 @@
-import { Node } from "../nv/src/index.js";
+import { Node } from "nv";
 
 class Publisher extends Node {
     async init() {
