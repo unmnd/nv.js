@@ -10,6 +10,8 @@ UNMND, Ltd. 2021
 All Rights Reserved
 */
 
+import { promises as fs } from "fs";
+
 import winston from "winston";
 import Redis from "ioredis";
 
@@ -160,7 +162,7 @@ export class Node {
         });
 
         if (this.skipRegistration) {
-            this.log.warning("Skipping node registration...");
+            this.log.warn("Skipping node registration...");
         } else {
             // Check if the node exists
             if (await this._redis["nodes"].exists(this.name)) {
@@ -258,7 +260,7 @@ export class Node {
      */
     async _connectRedis(redisHost, { port = 6379, db = 0 }) {
         const connect = async (options) => {
-            this.log.info(
+            this.log.debug(
                 `Connecting to redis server at ${options.host}:${options.port}`
             );
             const r = new Redis({ ...options, lazyConnect: true });
@@ -273,10 +275,9 @@ export class Node {
             } catch (e) {
                 r.disconnect();
 
-                this.log.error(
-                    `Failed to connect to Redis server at ${options.host}:${options.port}`
+                this.log.debug(
+                    `Failed to connect to Redis server at ${options.host}:${options.port}\n${e}`
                 );
-                this.log.error(e);
 
                 return false;
             }
@@ -548,7 +549,7 @@ export class Node {
      *
      * Note: This will not count nodes which have not been registered (such as
      * the nv cli)! If you want to include these subscribers, use
-     * `getNumTopicSubscriptions` instead.
+     * {@link getNumTopicSubscriptions} instead.
      *
      * @param {String} topic The topic to get subscribers for.
      *
@@ -885,5 +886,111 @@ export class Node {
 
         // Execute the pipe
         return pipe.exec();
+    }
+
+    /**
+     * Load a JSON file containing parameters, but don't set them on the
+     * parameter server.
+     *
+     * To automatically load and set parameters on the parameter server, use
+     * {@link setParametersFromFile}.
+     *
+     * Unlike the Python equivalent, this method has some limitations:
+     * - The file must be a JSON file.
+     * - No conditional statements are supported.
+     *
+     * @param {String} filePath The path to the file to load.
+     *
+     * @return {Promise} A promise which resolves to an object of parameters.
+     *
+     * @example
+     * // Load the parameters from a file
+     * const params = await nv.loadParametersFromFile('/path/to/parameters.json');
+     */
+    async loadParametersFromFile(filePath) {
+        // Read the file
+        const file = await fs.readFile(filePath, { encoding: "utf8" });
+
+        // Parse the file
+        return JSON.parse(file);
+    }
+
+    /**
+     * Set multiple parameter values on the parameter server from a file.
+     *
+     * This method is similar to {@link loadParametersFromFile}, but it
+     * automatically sets the parameters on the parameter server.
+     *
+     * Unlike the Python equivalent, this method has some limitations:
+     * - The file must be a JSON file.
+     * - No conditional statements are supported.
+     *
+     * @param {String} filePath The path to the file to load.
+     *
+     * @return {Promise} A promise which resolves when all the parameters have
+     * been set.
+     *
+     * @example
+     * // Load and set the parameters from a file
+     * await nv.setParametersFromFile('/path/to/parameters.json');
+     */
+    async setParametersFromFile(filePath) {
+        /**
+         * Convert a parameter dictionary read from a file, to a list of
+         * parameters suitable for sending to the parameter server.
+         *
+         * Supports subparameters, by recursively setting the parameter name as:
+         *     `subparam.param = value1`
+         *     `subparam1.subparam2.param = value2`
+         *
+         * @param {Object} parameterObject The parameter object to convert.
+         * @param {String} _nodeName
+         * @param {Array} _subparams
+         */
+        function convertToParameterList(
+            parameterObject,
+            { _nodeName = null, _subparams = [] } = {}
+        ) {
+            const parameterArray = [];
+
+            // Loop over each parameter
+            for (const [key, value] of Object.entries(parameterObject)) {
+                // If this is the first level of the parameter, set the node name
+                if (_nodeName === null) {
+                    // Recurse all parameters
+                    parameterArray.push(
+                        ...convertToParameterList(value, {
+                            _nodeName: key,
+                        })
+                    );
+                } else if (typeof value === "object") {
+                    // Recurse all parameters
+                    parameterArray.push(
+                        ...convertToParameterList(value, {
+                            _nodeName: _nodeName,
+                            _subparams: [..._subparams, key],
+                        })
+                    );
+                } else {
+                    // Set the parameter
+                    parameterArray.push({
+                        nodeName: _nodeName,
+                        name: _subparams.concat(key).join("."),
+                        value,
+                    });
+                }
+            }
+
+            return parameterArray;
+        }
+
+        this.log.info(`Setting parameters from file: ${filePath}`);
+
+        // Load the parameters from the file
+        const parameters = await this.loadParametersFromFile(filePath);
+
+        const parametersList = convertToParameterList(parameters);
+
+        return this.setParameters(parametersList);
     }
 }
