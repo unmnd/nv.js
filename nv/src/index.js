@@ -14,6 +14,7 @@ import { promises as fs } from "fs";
 
 import winston from "winston";
 import Redis from "ioredis";
+import isValidUTF8 from "utf-8-validate";
 
 import * as utils from "./utils.js";
 import * as version from "./version.js";
@@ -72,6 +73,7 @@ export class Node {
         this.name = nodeName;
         this.nodeRegistered = false;
         this.skipRegistration = skipRegistration;
+        this.keepOldParameters = keepOldParameters;
         this.stopped = false;
         this._startTime = Date.now() / 1000;
 
@@ -128,7 +130,7 @@ export class Node {
 
         // Handle received messages
         this._redis["sub"].on(
-            "message",
+            "messageBuffer",
             this._handleSubscriptionCallback.bind(this)
         );
 
@@ -342,7 +344,12 @@ export class Node {
      */
     _decodePubSubMessage(message) {
         try {
-            return JSON.parse(message);
+            // Check the message is valid utf8
+            if (isValidUTF8(message)) {
+                return JSON.parse(message.toString());
+            } else {
+                return message;
+            }
         } catch (e) {
             return message;
         }
@@ -356,6 +363,11 @@ export class Node {
      * @returns The encoded message.
      */
     _encodePubSubMessage(message) {
+        // If the message is a buffer, don't encode it
+        if (Buffer.isBuffer(message)) {
+            return message;
+        }
+
         try {
             return JSON.stringify(message);
         } catch (e) {
@@ -374,7 +386,7 @@ export class Node {
 
         if (callbacks) {
             callbacks.forEach((callback) => {
-                callback(message);
+                callback(this._decodePubSubMessage(message));
             });
         }
     }
@@ -638,6 +650,30 @@ export class Node {
 
         // Publish the message
         this._redis["pub"].publish(channel, message);
+    }
+
+    /**
+     * Get all the services currently registered, and their topic ID used when
+     * calling them.
+     *
+     * @returns {Object} A dictionary of services and their topic IDs.
+     */
+    getServices() {
+        // Get all nodes currently registered
+        const nodes = this.getNodes();
+
+        // Loop over each node and add their services to the list
+        const services = {};
+
+        for (const nodeName in nodes) {
+            const node = nodes[nodeName];
+
+            for (const [topic, service] of Object.entries(node.services)) {
+                services[service] = topic;
+            }
+        }
+
+        return services;
     }
 
     /**

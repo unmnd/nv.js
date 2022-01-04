@@ -20,6 +20,7 @@
     "homepage": "navvy.ai",
     "dependencies": {
         "ioredis": "^4.28.2",
+        "utf-8-validate": "^5.0.8",
         "winston": "^3.3.3"
     }
 }
