@@ -1,6 +1,6 @@
 {
     "name": "nv",
-    "version": "1.0.9",
+    "version": "1.0.10",
     "description": "A JavaScript-based robot-focused framework.",
     "type": "module",
     "main": "./src/index.js",

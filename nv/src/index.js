@@ -198,6 +198,23 @@ export class Node {
                 await this.deleteParameters({});
             }
         }
+
+        // The service requests dict improves efficiency by allowing all service
+        // requests to respond to the same topic (meaning only one subscription).
+        // The queue keys are a unique request id, and the values contain a dict:
+        // {
+        //     "result": "success"/"error"
+        //     "data": <response data>/<error message>,
+        //     "event": Event()
+        // }
+        this._serviceRequests = {};
+
+        // Generate a random ID for the service response channel for this node
+        this._serviceResponseChannel = "srv://" + randomUUID();
+        this.createSubscription(
+            this._serviceResponseChannel,
+            this._handleServiceCallback.bind(this)
+        );
     }
 
     /**
@@ -390,6 +407,31 @@ export class Node {
                 callback(this._decodePubSubMessage(message));
             });
         }
+    }
+
+    /**
+     * Handle responses from server requests. This works similarly to
+     * `_handle_subscription_callback`, but is specific to messages received as
+     * a response to a service request.
+     *
+     * Any response contains the following object:
+     * ```
+     * {
+     *     result: "success"/"error",
+     *     data: <response data>/<error message>,
+     *     request_id: <request id>
+     * }
+     * ```
+     *
+     * @param {Object} message The message to handle
+     */
+    _handleServiceCallback(message) {
+        // Save the result
+        this._serviceRequests[message.request_id].result = message.result;
+        this._serviceRequests[message.request_id].data = message.data;
+
+        // Resolve the promise to indicate the request has completed
+        this._serviceRequests[message.request_id].resolvePromise();
     }
 
     /**
@@ -694,16 +736,19 @@ export class Node {
      */
     waitForServiceReady(serviceName, { timeout = 10000 } = {}) {
         return new Promise((resolve, reject) => {
+            let timeoutFunc = null;
+
             const interval = setInterval(async () => {
                 const services = await this.getServices();
 
                 if (serviceName in services) {
                     clearInterval(interval);
+                    clearTimeout(timeoutFunc);
                     resolve(true);
                 }
             }, 100);
 
-            setTimeout(() => {
+            timeoutFunc = setTimeout(() => {
                 clearInterval(interval);
                 throw new Error(
                     `Timeout waiting for service ${serviceName} to be ready`
@@ -770,6 +815,89 @@ export class Node {
 
         // Save the service name and ID
         this._services[serviceName] = serviceId;
+    }
+
+    /**
+     * Call a service.
+     *
+     * @param {String} serviceName The name of the service to call.
+     * @param {Array} args Positional args to pass to the service.
+     * @param {Object} kwargs Keyword args to pass to the service.
+     *
+     * @returns {Promise} A promise which resolves to the result of the service.
+     *
+     * @throws {Error} If the service does not exist.
+     *
+     * @example
+     * // Call the "test" service
+     * const result = await node.callService("test", "Hello", "World");
+     */
+    async callService(serviceName, args = [], kwargs = {}) {
+
+        // Throw an error if args or kwargs are not an array or object
+        if (!(args instanceof Array)) {
+            throw new Error(
+                `args must be an array, got ${typeof args}`
+            );
+        } else if (!(kwargs instanceof Object)) {
+            throw new Error(
+                `kwargs must be an object, got ${typeof kwargs}`
+            );
+        }
+
+        // Get all the services currently registered
+        const services = await this.getServices();
+
+        // Check the service exists
+        if (!(serviceName in services)) {
+            throw new Error(`Service ${serviceName} does not exist`);
+        }
+
+        // Get the service ID
+        const serviceId = services[serviceName];
+
+        // Generate a request ID
+        const requestId = randomUUID();
+
+        // Create the entry in the services requests object
+        this._serviceRequests[requestId] = {
+            data: null,
+            resolvePromise: null,
+        };
+
+        // This allows the promise to be resolved from the message callback
+        this._serviceRequests[requestId].event = new Promise(
+            (resolve, reject) => {
+                this._serviceRequests[requestId].resolvePromise = resolve;
+            }
+        );
+
+        // Create a message to send to the service
+        const message = {
+            response_topic: this._serviceResponseChannel,
+            request_id: requestId,
+            args: args,
+            kwargs: kwargs,
+        };
+
+        // Call the service
+        this.publish(serviceId, message);
+
+        // Wait for the response
+        await this._serviceRequests[requestId].event;
+
+        // Check for errors
+        if (this._serviceRequests[requestId].result === "error") {
+            throw new Error(this._serviceRequests[requestId].data);
+        }
+
+        // Extract the data
+        const data = this._serviceRequests[requestId].data;
+
+        // Delete the request
+        delete this._serviceRequests[requestId];
+
+        return data;
     }
 
     /**
