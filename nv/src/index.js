@@ -18,6 +18,7 @@ import isValidUTF8 from "utf-8-validate";
 
 import * as utils from "./utils.js";
 import * as version from "./version.js";
+import { randomUUID } from "crypto";
 
 export class Node {
     /**
@@ -497,7 +498,7 @@ export class Node {
         const nodes = {};
 
         for (const nodeName of nodeNames) {
-            nodes[nodeName] = await this.getNodeInformation(nodeName);
+            nodes[nodeName] = await this.getNodeInformation({ nodeName });
         }
 
         return nodes;
@@ -658,9 +659,9 @@ export class Node {
      *
      * @returns {Object} A dictionary of services and their topic IDs.
      */
-    getServices() {
+    async getServices() {
         // Get all nodes currently registered
-        const nodes = this.getNodes();
+        const nodes = await this.getNodes();
 
         // Loop over each node and add their services to the list
         const services = {};
@@ -669,11 +670,106 @@ export class Node {
             const node = nodes[nodeName];
 
             for (const [topic, service] of Object.entries(node.services)) {
-                services[service] = topic;
+                services[topic] = service;
             }
         }
 
         return services;
+    }
+
+    /**
+     * Wait for a service to be ready.
+     *
+     * This method is used to wait for a service to be ready before calling it.
+     *  This is useful when a service is created in the same thread as the node,
+     *  and the node needs to wait for the service to be ready before calling it.
+     *
+     * @param {String} service The service to wait for.
+     * @param {Number} timeout The maximum amount of time to wait for the service
+     * to be ready.
+     *
+     * @returns {Promise} A promise which resolves to true when the service is ready.
+     *
+     * @throws {Error} If the service does not exist after the timeout.
+     */
+    waitForServiceReady(serviceName, { timeout = 10000 } = {}) {
+        return new Promise((resolve, reject) => {
+            const interval = setInterval(async () => {
+                const services = await this.getServices();
+
+                if (serviceName in services) {
+                    clearInterval(interval);
+                    resolve(true);
+                }
+            }, 100);
+
+            setTimeout(() => {
+                clearInterval(interval);
+                throw new Error(
+                    `Timeout waiting for service ${serviceName} to be ready`
+                );
+            }, timeout);
+        });
+    }
+
+    /**
+     * Create a service.
+     *
+     * A service is a function which can be called by other nodes. It can
+     *  accept any number of args and kwargs, and can return most standard datatypes.
+     *
+     * @param {String} serviceName The name of the service.
+     * @param {CallableFunction} callback The function to call when the service is
+     * called.
+     *
+     * @example
+     * // Create a service called "test"
+     * node.createService("test", (a, b, c) => {
+     *    return a + b + c;
+     * });
+     */
+    createService(serviceName, callback) {
+        /**
+         * Used to handle requests to call a service, and respond by publishing
+         * data back on the requested topic.
+         *
+         * @param {Object} message An object containing the request id, response
+         * topic, and the args and kwargs to pass to the service.
+         */
+        const handleServiceCallback = (message) => {
+            let result;
+
+            // Call the service
+            try {
+                result = callback(...message.args, message.kwargs);
+            } catch (e) {
+                this.log.error(
+                    `Error handling service call: ${serviceName}\n${e}`
+                );
+                this.publish(message.response_topic, {
+                    result: "error",
+                    data: e.message,
+                    request_id: message.request_id,
+                });
+                return;
+            }
+
+            // Publish the result on the response topic
+            this.publish(message.response_topic, {
+                result: "success",
+                data: result,
+                request_id: message.request_id,
+            });
+        };
+
+        // Generate a unique id for the service
+        const serviceId = "srv://" + randomUUID();
+
+        // Register a message handler for the service
+        this.createSubscription(serviceId, handleServiceCallback);
+
+        // Save the service name and ID
+        this._services[serviceName] = serviceId;
     }
 
     /**
