@@ -8,16 +8,12 @@ UNMND, Ltd. 2021
 All Rights Reserved
 */
 
+/**
+ * Generate a random human-readable name.
+ *
+ * @returns {String} A random name.
+ */
 export function generateName() {
-    /*
-  ### Generate a random human-readable name.
-
-  ---
-
-  ### Returns:
-    - A random name.
-  */
-
     const adjectives = [
         "defiant",
         "homeless",
@@ -430,6 +426,14 @@ export function generateName() {
     return randomChoice(adjectives) + "_" + randomChoice(nouns);
 }
 
+/**
+ * Sleep for a given number of milliseconds.
+ *
+ * @param {Number} duration The number of milliseconds to sleep.
+ *
+ * @returns {Promise} A promise that resolves after the given number of
+ * milliseconds.
+ */
 export function sleep(duration) {
     return new Promise((resolve) => setTimeout(resolve, duration));
 }
