@@ -5,9 +5,9 @@ class Subscriber extends Node {
         await super.init();
 
         // Subscribe to a topic
-        node.createSubscription(
+        this.createSubscription(
             "hello_world",
-            node.subscriber_callback.bind(node)
+            this.subscriber_callback.bind(this)
         );
     }
 
