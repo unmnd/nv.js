@@ -1,6 +1,0 @@
-{
-    "type": "module",
-    "dependencies": {
-        "nv": "file:../nv"
-    }
-}

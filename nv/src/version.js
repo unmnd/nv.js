@@ -1,6 +1,10 @@
-import fs from "fs";
+const fs = require("fs");
+const path = require("path");
 
-// Get version from package.json
-export const __version__ = JSON.parse(
-    fs.readFileSync(new URL("../package.json", import.meta.url))
-).version;
+// Read the package.json file
+const packageJson = JSON.parse(
+    fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")
+);
+const __version__ = packageJson.version;
+
+exports.__version__ = __version__;

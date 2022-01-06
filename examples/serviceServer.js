@@ -1,4 +1,4 @@
-import { Node } from "nv";
+const { Node } = require("../nv/src/index");
 
 class OddEvenCheckServer extends Node {
     async init() {
@@ -41,4 +41,4 @@ class OddEvenCheckServer extends Node {
 
 // Create the node
 const node = new OddEvenCheckServer({ nodeName: "odd_even_check_server_node" });
-await node.init();
+node.init();

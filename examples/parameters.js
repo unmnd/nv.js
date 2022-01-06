@@ -1,7 +1,6 @@
-import path from "path";
-import { fileURLToPath } from "url";
+const path = require("path");
 
-import { Node } from "nv";
+const { Node } = require("../nv/src/index");
 
 class ParameterExamples extends Node {
     async init() {
@@ -62,11 +61,7 @@ class ParameterExamples extends Node {
 
         // If you want to set loads of parameters, you can do this from a .json
         // file accessible from the node
-        await this.setParametersFromFile(
-            fileURLToPath(
-                path.join(path.dirname(import.meta.url), "config.json")
-            )
-        );
+        await this.setParametersFromFile(path.join(__dirname, "config.json"));
         this.log.info(
             "Parameter from config.json: " +
                 (await this.getParameter("param1", { nodeName: "node1" }))
@@ -75,9 +70,7 @@ class ParameterExamples extends Node {
         // If you only want to load the parameters but not set them on the
         // parameter server, you can use `loadParametersFromFile`
         const parameters = await this.loadParametersFromFile(
-            fileURLToPath(
-                path.join(path.dirname(import.meta.url), "config.json")
-            )
+            path.join(__dirname, "config.json")
         );
         this.log.info(
             "Parameter from config.json: " + parameters["node1"]["param1"]

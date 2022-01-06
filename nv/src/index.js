@@ -10,17 +10,24 @@ UNMND, Ltd. 2021
 All Rights Reserved
 */
 
-import { promises as fs } from "fs";
+// import { promises as fs } from "fs";
+const { promises: fs } = require("fs");
 
-import winston from "winston";
-import Redis from "ioredis";
-import isValidUTF8 from "utf-8-validate";
+// import winston from "winston";
+// import Redis from "ioredis";
+// import isValidUTF8 from "utf-8-validate";
+const winston = require("winston");
+const Redis = require("ioredis");
+const isValidUTF8 = require("utf-8-validate");
 
-import * as utils from "./utils.js";
-import * as version from "./version.js";
-import { randomUUID } from "crypto";
+// import * as utils from "./utils.js";
+// import * as version from "./version.js";
+// import { randomUUID } from "crypto";
+const utils = require("./utils.js");
+const version = require("./version.js");
+const { randomUUID } = require("crypto");
 
-export class Node {
+class Node {
     /**
      * The Node class is the main class of the nv framework. It is used to
      * handle all interaction with the framework, including initialisation of
@@ -833,16 +840,11 @@ export class Node {
      * const result = await node.callService("test", "Hello", "World");
      */
     async callService(serviceName, args = [], kwargs = {}) {
-
         // Throw an error if args or kwargs are not an array or object
         if (!(args instanceof Array)) {
-            throw new Error(
-                `args must be an array, got ${typeof args}`
-            );
+            throw new Error(`args must be an array, got ${typeof args}`);
         } else if (!(kwargs instanceof Object)) {
-            throw new Error(
-                `kwargs must be an object, got ${typeof kwargs}`
-            );
+            throw new Error(`kwargs must be an object, got ${typeof kwargs}`);
         }
 
         // Get all the services currently registered
@@ -1254,3 +1256,5 @@ export class Node {
         return this.setParameters(parametersList);
     }
 }
+
+exports.Node = Node;

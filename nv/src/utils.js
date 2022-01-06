@@ -13,7 +13,7 @@ All Rights Reserved
  *
  * @returns {String} A random name.
  */
-export function generateName() {
+function generateName() {
     const adjectives = [
         "defiant",
         "homeless",
@@ -434,6 +434,9 @@ export function generateName() {
  * @returns {Promise} A promise that resolves after the given number of
  * milliseconds.
  */
-export function sleep(duration) {
+function sleep(duration) {
     return new Promise((resolve) => setTimeout(resolve, duration));
 }
+
+exports.generateName = generateName;
+exports.sleep = sleep;

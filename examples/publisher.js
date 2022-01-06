@@ -1,4 +1,4 @@
-import { Node } from "nv";
+const { Node } = require("../nv/src/index");
 
 class Publisher extends Node {
     async init() {

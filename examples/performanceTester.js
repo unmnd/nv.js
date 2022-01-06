@@ -1,6 +1,6 @@
-import crypto from "crypto";
+const crypto = require("crypto");
 
-import { Node } from "nv";
+const { Node } = require("../nv/src/index");
 
 const testData = {
     smallString: "This is a small text message",
