@@ -3,8 +3,8 @@ The `Node` class is the base class for all nodes in the network. It provides
 methods for communicating between different nodes and the server, as well as
 logging, parameter handling, and other things.
 
-Callum Morrison, 2021
-UNMND, Ltd. 2021
+Callum Morrison, 2022
+UNMND, Ltd.
 <callum@unmnd.com>
 
 All Rights Reserved
@@ -53,7 +53,7 @@ class Node {
         skipRegistration = false,
         logLevel = null,
         keepOldParameters = false,
-    }) {
+    } = {}) {
         // Bind callbacks to gracefully exit the node on signal
         process.on("SIGINT", this._sigtermHandler.bind(this));
         process.on("SIGTERM", this._sigtermHandler.bind(this));
