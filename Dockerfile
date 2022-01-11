@@ -17,13 +17,10 @@ ARG DEBIAN_FRONTEND=noninteractive
 ENV TZ="Europe/London"
 
 # Copy required files across
-COPY examples /opt/nv/examples
-COPY nv /opt/nv
+COPY . /opt/nv
 
 # Install globally
-RUN npm --global config set user root && \
-    npm --global install /opt/nv && \
+RUN npm --global install /opt/nv && \
     mkdir /usr/local/lib/node/ && \
-    mv /usr/local/lib/node_modules/nv /usr/local/lib/node/
-
-# ENTRYPOINT [ "/bin/bash" ]
+    mv /usr/local/lib/node_modules/nv /usr/local/lib/node/ && \
+    cd /usr/local/lib/node/nv && npm install
