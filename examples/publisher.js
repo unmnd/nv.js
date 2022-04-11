@@ -1,4 +1,4 @@
-const { Node } = require("../nv/src/index");
+const { Node } = require("../src/index");
 
 class Publisher extends Node {
     async init() {

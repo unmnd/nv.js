@@ -1,6 +1,6 @@
 const crypto = require("crypto");
 
-const { Node } = require("../nv/src/index");
+const { Node } = require("../src/index");
 
 const testData = {
     smallString: "This is a small text message",

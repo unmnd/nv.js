@@ -1,6 +1,6 @@
 const path = require("path");
 
-const { Node } = require("../nv/src/index");
+const { Node } = require("../src/index");
 
 class ParameterExamples extends Node {
     async init() {

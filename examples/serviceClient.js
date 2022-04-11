@@ -1,4 +1,4 @@
-const { Node } = require("../nv/src/index");
+const { Node } = require("../src/index");
 
 class OddEvenCheckClient extends Node {
     async init() {
