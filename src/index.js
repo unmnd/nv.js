@@ -80,6 +80,10 @@ class Node {
         // Initialise parameters
         this.name = nodeName;
         this.nodeRegistered = false;
+        this._resolveNodeInitialisedPromise = null;
+        this.nodeInitialized = new Promise((resolve) => {
+            this._resolveNodeInitialisedPromise = resolve;
+        });
         this.skipRegistration = skipRegistration;
         this.keepOldParameters = keepOldParameters;
         this.stopped = false;
@@ -222,6 +226,10 @@ class Node {
             this._serviceResponseChannel,
             this._handleServiceCallback.bind(this)
         );
+
+        // The nodeInitialised promise can be used to check if the node is
+        // ready, useful when awaiting node.init() is not possible.
+        this._resolveNodeInitialisedPromise();
     }
 
     /**
