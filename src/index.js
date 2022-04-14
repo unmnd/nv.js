@@ -81,7 +81,7 @@ class Node {
         this.name = nodeName;
         this.nodeRegistered = false;
         this._resolveNodeInitialisedPromise = null;
-        this.nodeInitialized = new Promise((resolve) => {
+        this.nodeInitialised = new Promise((resolve) => {
             this._resolveNodeInitialisedPromise = resolve;
         });
         this.skipRegistration = skipRegistration;
