@@ -505,7 +505,9 @@ class Node {
         this.log.info(`Destroying node ${this.name}`);
 
         // Remove the node from the list of nodes
-        this._deregisterNode();
+        if (this.nodeRegistered) {
+            this._deregisterNode();
+        }
 
         // Stop any timers or services running
         this.stopped = true;
