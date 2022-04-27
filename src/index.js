@@ -53,6 +53,8 @@ class Node {
         skipRegistration = false,
         logLevel = null,
         keepOldParameters = false,
+        redisHost = null,
+        redisPort = null,
     } = {}) {
         // Bind callbacks to gracefully exit the node on signal
         process.on("SIGINT", this._sigtermHandler.bind(this));
@@ -88,6 +90,8 @@ class Node {
         this.keepOldParameters = keepOldParameters;
         this.stopped = false;
         this._startTime = Date.now() / 1000;
+        this.redisHost = redisHost;
+        this.redisPort = redisPort;
 
         // The subscriptions dictionary is in the form of:
         // {
@@ -128,8 +132,8 @@ class Node {
         );
 
         // Connect redis clients
-        const redisHost = process.env.NV_REDIS_HOST;
-        const redisPort = process.env.NV_REDIS_PORT || 6379;
+        const redisHost = this.redisHost || process.env.NV_REDIS_HOST;
+        const redisPort = this.redisPort || process.env.NV_REDIS_PORT || 6379;
 
         this._redis = {};
 
