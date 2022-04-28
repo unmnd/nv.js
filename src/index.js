@@ -565,7 +565,7 @@ class Node {
 
             // Only update if node information is returned, this prevents the
             // error where a node is removed between the getNodesList call and here
-            if (nodeInformation) {
+            if (nodeInformation != null) {
                 nodes[nodeName] = nodeInformation;
             }
         }
