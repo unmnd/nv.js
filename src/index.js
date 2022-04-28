@@ -561,7 +561,13 @@ class Node {
         const nodes = {};
 
         for (const nodeName of nodeNames) {
-            nodes[nodeName] = await this.getNodeInformation({ nodeName });
+            const nodeInformation = await this.getNodeInformation({ nodeName });
+
+            // Only update if node information is returned, this prevents the
+            // error where a node is removed between the getNodesList call and here
+            if (nodeInformation) {
+                nodes[nodeName] = nodeInformation;
+            }
         }
 
         return nodes;
