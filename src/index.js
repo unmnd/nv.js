@@ -613,6 +613,11 @@ class Node {
             for (const [topic, lastPublished] of Object.entries(
                 node.publishers
             )) {
+                // Remove service topics
+                if (topic.startsWith("srv://")) {
+                    continue;
+                }
+
                 if (topic in topics) {
                     if (topics[topic] < lastPublished) {
                         topics[topic] = lastPublished;
