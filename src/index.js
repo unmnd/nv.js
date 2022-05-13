@@ -18,7 +18,8 @@ const { promises: fs } = require("fs");
 // import isValidUTF8 from "utf-8-validate";
 const winston = require("winston");
 const Redis = require("ioredis");
-const isValidUTF8 = require("utf-8-validate");
+// const isValidUTF8 = require("utf-8-validate");
+const lz4 = require("lz4");
 
 // import * as utils from "./utils.js";
 // import * as version from "./version.js";
@@ -381,12 +382,14 @@ class Node {
      */
     _decodePubSubMessage(message) {
         try {
-            // Check the message is valid utf8
-            if (isValidUTF8(message)) {
-                return JSON.parse(message.toString());
-            } else {
-                return message;
-            }
+            // // Check the message is valid utf8
+            // if (isValidUTF8(message)) {
+            //     return JSON.parse(message.toString());
+            // } else {
+            //     return message;
+            // }
+
+            return JSON.parse(lz4.decode(message));
         } catch (e) {
             return message;
         }
@@ -400,13 +403,13 @@ class Node {
      * @returns The encoded message.
      */
     _encodePubSubMessage(message) {
-        // If the message is a buffer, don't encode it
-        if (Buffer.isBuffer(message)) {
-            return message;
-        }
+        // // If the message is a buffer, don't encode it
+        // if (Buffer.isBuffer(message)) {
+        //     return message;
+        // }
 
         try {
-            return JSON.stringify(message);
+            return lz4.encode(JSON.stringify(message));
         } catch (e) {
             return message;
         }
