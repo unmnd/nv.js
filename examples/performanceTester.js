@@ -29,6 +29,16 @@ const testData = {
     ],
     OneMBofRandomBytes: crypto.randomBytes(1024 * 1024),
     TenMBofRandomBytes: crypto.randomBytes(1024 * 1024 * 10),
+    OneDFloatsArray: new Array(64 * 64).fill().map(() => Math.random()),
+    OneDIntArray: new Array(64 * 64)
+        .fill()
+        .map(() => Math.floor(Math.random() * 100)),
+    TwoDFloatsArray: new Array(64)
+        .fill()
+        .map(() => new Array(64).fill().map(() => Math.random())),
+    ImageArray: new Array(1024)
+        .fill()
+        .map(() => new Array(1024).fill().map(() => Math.random())),
 };
 
 class PerformanceTester extends Node {
@@ -63,6 +73,8 @@ class PerformanceTester extends Node {
                 // Round to 2 decimal places
                 this.log.info(`${dataSize}: ${duration.toFixed(2)}ms`);
             }
+
+            this.destroyNode();
 
             return;
         }
