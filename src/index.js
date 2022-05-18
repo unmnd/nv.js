@@ -18,8 +18,8 @@ const { promises: fs } = require("fs");
 // import isValidUTF8 from "utf-8-validate";
 const winston = require("winston");
 const Redis = require("ioredis");
-// const isValidUTF8 = require("utf-8-validate");
-const lz4 = require("lz4");
+const isValidUTF8 = require("utf-8-validate");
+// const lz4 = require("lz4");
 
 // import * as utils from "./utils.js";
 // import * as version from "./version.js";
@@ -381,16 +381,10 @@ class Node {
      * @returns The decoded message.
      */
     _decodePubSubMessage(message) {
-        try {
-            // // Check the message is valid utf8
-            // if (isValidUTF8(message)) {
-            //     return JSON.parse(message.toString());
-            // } else {
-            //     return message;
-            // }
-
-            return JSON.parse(lz4.decode(message));
-        } catch (e) {
+        // Check the message is valid utf8
+        if (isValidUTF8(message)) {
+            return JSON.parse(message.toString());
+        } else {
             return message;
         }
     }
@@ -403,13 +397,13 @@ class Node {
      * @returns The encoded message.
      */
     _encodePubSubMessage(message) {
-        // // If the message is a buffer, don't encode it
-        // if (Buffer.isBuffer(message)) {
-        //     return message;
-        // }
+        // If the message is a buffer, don't encode it
+        if (Buffer.isBuffer(message)) {
+            return message;
+        }
 
         try {
-            return lz4.encode(JSON.stringify(message));
+            return JSON.stringify(message);
         } catch (e) {
             return message;
         }
@@ -451,6 +445,7 @@ class Node {
         // Save the result
         this._serviceRequests[message.request_id].result = message.result;
         this._serviceRequests[message.request_id].data = message.data;
+        this._serviceRequests[message.request_id].timings = message.timings;
 
         // Resolve the promise to indicate the request has completed
         this._serviceRequests[message.request_id].resolvePromise();
@@ -808,7 +803,7 @@ class Node {
      *    return a + b + c;
      * });
      */
-    createService(serviceName, callback) {
+    createService(serviceName, callbackFunction) {
         /**
          * Used to handle requests to call a service, and respond by publishing
          * data back on the requested topic.
@@ -816,12 +811,16 @@ class Node {
          * @param {Object} message An object containing the request id, response
          * topic, and the args and kwargs to pass to the service.
          */
-        const handleServiceCallback = (message) => {
+        const handleServiceCall = (message) => {
             let result;
+
+            // Update timings
+            message.timings.request_received = Date.now() / 1000;
 
             // Call the service
             try {
-                result = callback(...message.args, message.kwargs);
+                result = callbackFunction(...message.args, message.kwargs);
+                message.timings.request_completed = Date.now() / 1000;
             } catch (e) {
                 this.log.error(
                     `Error handling service call: ${serviceName}\n${e}`
@@ -830,6 +829,7 @@ class Node {
                     result: "error",
                     data: e.message,
                     request_id: message.request_id,
+                    timings: message.timings,
                 });
                 return;
             }
@@ -839,6 +839,7 @@ class Node {
                 result: "success",
                 data: result,
                 request_id: message.request_id,
+                timings: message.timings,
             });
         };
 
@@ -846,7 +847,7 @@ class Node {
         const serviceId = "srv://" + randomUUID();
 
         // Register a message handler for the service
-        this.createSubscription(serviceId, handleServiceCallback);
+        this.createSubscription(serviceId, handleServiceCall);
 
         // Save the service name and ID
         this._services[serviceName] = serviceId;
@@ -891,7 +892,6 @@ class Node {
 
         // Create the entry in the services requests object
         this._serviceRequests[requestId] = {
-            data: null,
             resolvePromise: null,
         };
 
@@ -904,6 +904,9 @@ class Node {
 
         // Create a message to send to the service
         const message = {
+            timings: {
+                start: Date.now() / 1000,
+            },
             response_topic: this._serviceResponseChannel,
             request_id: requestId,
             args: args,
@@ -923,6 +926,21 @@ class Node {
 
         // Extract the data
         const data = this._serviceRequests[requestId].data;
+        const timings = this._serviceRequests[requestId].timings;
+
+        // Complete timings
+        timings.end = Date.now() / 1000;
+
+        // Format timings as durations for print
+        const durations = Object.entries(timings).map(
+            ([key, value], i) =>
+                `${Math.round((value - timings.start) * 1000)}ms (${key})`
+        );
+
+        // Print and format the cumulative timings
+        this.log.debug(
+            `Service ${serviceName} timings: ${durations.join(" -> ")}`
+        );
 
         // Delete the request
         delete this._serviceRequests[requestId];

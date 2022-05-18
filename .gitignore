@@ -105,3 +105,6 @@ dist
 
 # Redis cache
 *.rdb
+
+# VSCode
+.vscode/
