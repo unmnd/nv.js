@@ -444,7 +444,20 @@ class Node {
     _handleServiceCallback(message) {
         // Save the result
         this._serviceRequests[message.request_id].result = message.result;
-        this._serviceRequests[message.request_id].data = message.data;
+
+        // If the data is a string and starts with "NV_BYTES:" we need to fetch
+        // the binary data directly from Redis.
+        if (
+            typeof message.data === "string" &&
+            message.data.startsWith("NV_BYTES:")
+        ) {
+            this._serviceRequests[message.request_id].data = this._redis[
+                "pub"
+            ].get(message.data);
+        } else {
+            this._serviceRequests[message.request_id].data = message.data;
+        }
+
         this._serviceRequests[message.request_id].timings = message.timings;
 
         // Resolve the promise to indicate the request has completed
@@ -812,14 +825,14 @@ class Node {
          * topic, and the args and kwargs to pass to the service.
          */
         const handleServiceCall = (message) => {
-            let result;
+            let data;
 
             // Update timings
             message.timings.request_received = Date.now() / 1000;
 
             // Call the service
             try {
-                result = callbackFunction(...message.args, message.kwargs);
+                data = callbackFunction(...message.args, message.kwargs);
                 message.timings.request_completed = Date.now() / 1000;
             } catch (e) {
                 this.log.error(
@@ -834,10 +847,19 @@ class Node {
                 return;
             }
 
+            // If the data is bytes, we can't JSON serialise it. Instead, we
+            // push it straight to Redis, and send the key in the service
+            // response.
+            if (Buffer.isBuffer(data)) {
+                const key = "NV_BYTES:" + randomUUID();
+                this._redis["pub"].set(key, data, "EX", 60);
+                data = key;
+            }
+
             // Publish the result on the response topic
             this.publish(message.response_topic, {
                 result: "success",
-                data: result,
+                data: data,
                 request_id: message.request_id,
                 timings: message.timings,
             });
