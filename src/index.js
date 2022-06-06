@@ -10,20 +10,12 @@ UNMND, Ltd.
 All Rights Reserved
 */
 
-// import { promises as fs } from "fs";
 const { promises: fs } = require("fs");
 
-// import winston from "winston";
-// import Redis from "ioredis";
-// import isValidUTF8 from "utf-8-validate";
 const winston = require("winston");
 const Redis = require("ioredis");
 const isValidUTF8 = require("utf-8-validate");
-// const lz4 = require("lz4");
 
-// import * as utils from "./utils.js";
-// import * as version from "./version.js";
-// import { randomUUID } from "crypto";
 const utils = require("./utils.js");
 const version = require("./version.js");
 const { randomUUID } = require("crypto");
