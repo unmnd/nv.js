@@ -40,12 +40,16 @@ class Node {
      * @param {String} [logLevel] The log level to use.
      * @param {Boolean} [keepOldParameters] Whether to keep old parameters from
      *     previous instances of this node.
+     * @param {String} [workspace] An optional workspace to use for topics.
+     * @param {String} [redisHost] Force the Redis host to use.
+     * @param {Number} [redisPort] Force the Redis port to use.
      */
     constructor({
         nodeName = null,
         skipRegistration = false,
         logLevel = null,
         keepOldParameters = false,
+        workspace = null,
         redisHost = null,
         redisPort = null,
     } = {}) {
@@ -85,6 +89,15 @@ class Node {
         this._startTime = Date.now() / 1000;
         this.redisHost = redisHost;
         this.redisPort = redisPort;
+
+        // Workspace used for topic names
+        this.workspace = workspace || process.env.NV_WORKSPACE;
+
+        if (workspace) {
+            this.log.info(`Using workspace ${workspace}`);
+        } else {
+            this.log.info("No workspace specified");
+        }
 
         // The subscriptions dictionary is in the form of:
         // {
@@ -714,20 +727,49 @@ class Node {
     }
 
     /**
-     * Publish a message to a channel.
+     * Convert a topic name to an absolute topic name.
      *
-     * @param {String} channel The channel to publish to.
+     * nv topics default to the global workspace, but this can be overridden by
+     *  proceeding the topic with a ".", which will automatically add the node
+     *   name.
+     *
+     *       A custom workspace can be added in the node setup or using an
+     *      environment variable.
+     *
+     * @param {String} topic The topic to convert.
+     *
+     * @returns {String} The absolute topic name.
+     */
+    getAbsoluteTopic(topic) {
+        if (topic.startsWith(".")) {
+            topic = this.name + topic;
+        }
+
+        if (this.workspace && !topic.startsWith(this.workspace)) {
+            topic = `${this.workspace}.${topic}`;
+        }
+
+        return topic;
+    }
+
+    /**
+     * Publish a message to a topic.
+     *
+     * @param {String} topic The topic to publish to.
      * @param {Object} message The message to publish.
      */
-    publish(channel, message) {
+    publish(topic, message) {
+        // Conver the topic name to an absolute topic name
+        topic = this.getAbsoluteTopic(topic);
+
         // Update the publishers object
-        this._publishers[channel] = Date.now() / 1000;
+        this._publishers[topic] = Date.now() / 1000;
 
         // Encode the message
         message = this._encodePubSubMessage(message);
 
         // Publish the message
-        this._redis["pub"].publish(channel, message);
+        this._redis["pub"].publish(topic, message);
     }
 
     /**
