@@ -15,6 +15,8 @@ const { promises: fs } = require("fs");
 const winston = require("winston");
 const Redis = require("ioredis");
 const isValidUTF8 = require("utf-8-validate");
+const { cpuUsage, memoryUsage } = require("process");
+const os = require("os");
 
 const utils = require("./utils.js");
 const version = require("./version.js");
@@ -184,6 +186,12 @@ class Node {
             port: redisPort,
             db: 3,
         });
+
+        // Assign the initial process usage for process monitoring
+        this._processUsage = {
+            cpu: process.cpuUsage(),
+            time: Date.now(),
+        };
 
         if (this.skipRegistration) {
             this.log.warn("Skipping node registration...");
@@ -540,6 +548,33 @@ class Node {
     }
 
     /**
+     * Get process information about the node.
+     *
+     * @returns {Object} The process information.
+     */
+    getNodePS() {
+        // Get the cpu usage by calculating how many active miliseconds have
+        // occured since the last check.
+        const usage = process.cpuUsage(this._processUsage.cpu);
+        const result =
+            (100 * (usage.user + usage.system)) /
+            ((Date.now() - this._processUsage.time) * 1000);
+
+        // Save the current usage for the next check
+        this._processUsage.cpu = process.cpuUsage();
+        this._processUsage.time = Date.now();
+
+        return {
+            pid: process.pid,
+            cpu: Math.round(result * 100) / 100,
+            memory:
+                Math.round(
+                    (process.memoryUsage().rss / os.totalmem()) * 100 * 100
+                ) / 100,
+        };
+    }
+
+    /**
      * Return the node information dictionary.
      *
      * If a node name is provided, the information for that node is returned. If
@@ -560,6 +595,7 @@ class Node {
                 subscriptions: Object.keys(this._subscriptions),
                 publishers: this._publishers,
                 services: this._services,
+                ps: this.getNodePS(),
             };
         } else {
             return JSON.parse(await this._redis["nodes"].get(nodeName));
