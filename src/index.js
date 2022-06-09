@@ -22,6 +22,8 @@ const utils = require("./utils.js");
 const version = require("./version.js");
 const { randomUUID } = require("crypto");
 
+PLATFORM = os.type() + " " + os.release() + " " + os.arch();
+
 class Node {
     /**
      * The Node class is the main class of the nv framework. It is used to
@@ -567,10 +569,9 @@ class Node {
         return {
             pid: process.pid,
             cpu: Math.round(result * 100) / 100,
-            memory:
-                Math.round(
-                    (process.memoryUsage().rss / os.totalmem()) * 100 * 100
-                ) / 100,
+            memory: process.memoryUsage().rss,
+            platform: PLATFORM,
+            lang: "Node.js " + process.version,
         };
     }
 
