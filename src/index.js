@@ -247,6 +247,12 @@ class Node {
             this._handleServiceCallback.bind(this)
         );
 
+        // Used to terminate the node remotely
+        this.createSubscription(
+            "nv_terminate",
+            this._handleTerminateCallback.bind(this)
+        );
+
         // The nodeInitialised promise can be used to check if the node is
         // ready, useful when awaiting node.init() is not possible.
         this._resolveNodeInitialisedPromise();
@@ -477,6 +483,22 @@ class Node {
 
         // Resolve the promise to indicate the request has completed
         this._serviceRequests[message.request_id].resolvePromise();
+    }
+
+    /**
+     * Handle node termination requests.
+     *
+     * @param {Object} message The message to handle.
+     * @param {String} message.node The name of the node to terminate.
+     * @param {String} message.reason The reason for termination.
+     */
+    _handleTerminateCallback(message) {
+        if (message.node === this.name) {
+            this.log.info(
+                `Node terminated remotely with reason: ${message.reason}`
+            );
+            this.destroyNode();
+        }
     }
 
     /**
