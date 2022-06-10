@@ -15,7 +15,6 @@ const { promises: fs } = require("fs");
 const winston = require("winston");
 const Redis = require("ioredis");
 const isValidUTF8 = require("utf-8-validate");
-const { cpuUsage, memoryUsage } = require("process");
 const os = require("os");
 
 const utils = require("./utils.js");
@@ -83,9 +82,9 @@ class Node {
         // Initialise parameters
         this.name = nodeName;
         this.nodeRegistered = false;
-        this._resolveNodeInitialisedPromise = null;
-        this.nodeInitialised = new Promise((resolve) => {
+        this.nodeInitialised = new Promise((resolve, reject) => {
             this._resolveNodeInitialisedPromise = resolve;
+            this._rejectNodeInitialisedPromise = reject;
         });
         this.skipRegistration = skipRegistration;
         this.keepOldParameters = keepOldParameters;
@@ -129,133 +128,141 @@ class Node {
      * inheriting the Node class.
      */
     async init() {
-        // Wait for the node condition to be met
         try {
-            await this.nodeCondition();
+            // Wait for the node condition to be met
+            try {
+                await this.nodeCondition();
+            } catch (e) {
+                this.log.error("Node condition failed, exiting");
+                throw e;
+            }
+
+            this.log.debug(
+                `Initialising ${this.name} using framework.js version nv ${version.__version__}`
+            );
+
+            // Connect redis clients
+            const redisHost = this.redisHost || process.env.NV_REDIS_HOST;
+            const redisPort =
+                this.redisPort || process.env.NV_REDIS_PORT || 6379;
+
+            this._redis = {};
+
+            // The topics database stores messages for communication between nodes.
+            // The key is always the topic.
+            this._redis["sub"] = await this._connectRedis(redisHost, {
+                port: redisPort,
+                db: 0,
+            });
+
+            // Handle received messages
+            this._redis["sub"].on(
+                "messageBuffer",
+                this._handleSubscriptionCallback.bind(this)
+            );
+
+            // There are two identical Redis instances, as ioredis does not allow
+            // subscriptions on the same client as publishing.
+            this._redis["pub"] = await this._connectRedis(redisHost, {
+                port: redisPort,
+                db: 0,
+            });
+
+            // The parameters database stores key-value parameters to be used for
+            // each node. The key is the node_name.parameter_name.
+            this._redis["params"] = await this._connectRedis(redisHost, {
+                port: redisPort,
+                db: 1,
+            });
+
+            // The transforms database stores transformations between frames. The key
+            // is in the form <source_frame>:<target_frame>.
+            this._redis["transforms"] = await this._connectRedis(redisHost, {
+                port: redisPort,
+                db: 2,
+            });
+
+            // The nodes database stores up-to-date information about which nodes are
+            // active on the network. Each node is responsible for storing and
+            // keeping it's own information active.
+            this._redis["nodes"] = await this._connectRedis(redisHost, {
+                port: redisPort,
+                db: 3,
+            });
+
+            // Assign the initial process usage for process monitoring
+            this._processUsage = {
+                cpu: process.cpuUsage(),
+                time: Date.now(),
+            };
+
+            if (this.skipRegistration) {
+                this.log.warn("Skipping node registration...");
+            } else {
+                // Check if the node exists
+                if (await this._redis["nodes"].exists(this.name)) {
+                    this.log.info(
+                        `Node ${this.name} already exists, waiting to see if it disappears...`
+                    );
+
+                    // Wait up to 10 seconds for the node to disappear
+                    let nodeExists = true;
+                    for (let i = 0; i < 10; i++) {
+                        nodeExists = await this._redis["nodes"].exists(
+                            this.name
+                        );
+                        if (!nodeExists) {
+                            break;
+                        }
+                        await utils.sleep(1000);
+                    }
+
+                    if (nodeExists) {
+                        throw new Error(`Node ${this.name} still exists`);
+                    }
+                }
+
+                // Register the node
+                this.log.info(`Registering node ${this.name}`);
+
+                await this._registerNode();
+
+                // Remove residual parameters if required
+                if (!this.keepOldParameters) {
+                    await this.deleteParameters({});
+                }
+            }
+
+            // The service requests dict improves efficiency by allowing all service
+            // requests to respond to the same topic (meaning only one subscription).
+            // The queue keys are a unique request id, and the values contain a dict:
+            // {
+            //     "result": "success"/"error"
+            //     "data": <response data>/<error message>,
+            //     "event": Event()
+            // }
+            this._serviceRequests = {};
+
+            // Generate a random ID for the service response channel for this node
+            this._serviceResponseChannel = "srv://" + randomUUID();
+            this.createSubscription(
+                this._serviceResponseChannel,
+                this._handleServiceCallback.bind(this)
+            );
+
+            // Used to terminate the node remotely
+            this.createSubscription(
+                "nv_terminate",
+                this._handleTerminateCallback.bind(this)
+            );
+
+            // The nodeInitialised promise can be used to check if the node is
+            // ready, useful when awaiting node.init() is not possible.
+            this._resolveNodeInitialisedPromise();
         } catch (e) {
-            this.log.error("Node condition failed, exiting");
+            this._rejectNodeInitialisedPromise(e);
             throw e;
         }
-
-        this.log.debug(
-            `Initialising ${this.name} using framework.js version nv ${version.__version__}`
-        );
-
-        // Connect redis clients
-        const redisHost = this.redisHost || process.env.NV_REDIS_HOST;
-        const redisPort = this.redisPort || process.env.NV_REDIS_PORT || 6379;
-
-        this._redis = {};
-
-        // The topics database stores messages for communication between nodes.
-        // The key is always the topic.
-        this._redis["sub"] = await this._connectRedis(redisHost, {
-            port: redisPort,
-            db: 0,
-        });
-
-        // Handle received messages
-        this._redis["sub"].on(
-            "messageBuffer",
-            this._handleSubscriptionCallback.bind(this)
-        );
-
-        // There are two identical Redis instances, as ioredis does not allow
-        // subscriptions on the same client as publishing.
-        this._redis["pub"] = await this._connectRedis(redisHost, {
-            port: redisPort,
-            db: 0,
-        });
-
-        // The parameters database stores key-value parameters to be used for
-        // each node. The key is the node_name.parameter_name.
-        this._redis["params"] = await this._connectRedis(redisHost, {
-            port: redisPort,
-            db: 1,
-        });
-
-        // The transforms database stores transformations between frames. The key
-        // is in the form <source_frame>:<target_frame>.
-        this._redis["transforms"] = await this._connectRedis(redisHost, {
-            port: redisPort,
-            db: 2,
-        });
-
-        // The nodes database stores up-to-date information about which nodes are
-        // active on the network. Each node is responsible for storing and
-        // keeping it's own information active.
-        this._redis["nodes"] = await this._connectRedis(redisHost, {
-            port: redisPort,
-            db: 3,
-        });
-
-        // Assign the initial process usage for process monitoring
-        this._processUsage = {
-            cpu: process.cpuUsage(),
-            time: Date.now(),
-        };
-
-        if (this.skipRegistration) {
-            this.log.warn("Skipping node registration...");
-        } else {
-            // Check if the node exists
-            if (await this._redis["nodes"].exists(this.name)) {
-                this.log.info(
-                    `Node ${this.name} already exists, waiting to see if it disappears...`
-                );
-
-                // Wait up to 10 seconds for the node to disappear
-                let nodeExists = true;
-                for (let i = 0; i < 10; i++) {
-                    nodeExists = await this._redis["nodes"].exists(this.name);
-                    if (!nodeExists) {
-                        break;
-                    }
-                    await utils.sleep(1000);
-                }
-
-                if (nodeExists) {
-                    throw new Error(`Node ${this.name} still exists`);
-                }
-            }
-
-            // Register the node
-            this.log.info(`Registering node ${this.name}`);
-
-            await this._registerNode();
-
-            // Remove residual parameters if required
-            if (!this.keepOldParameters) {
-                await this.deleteParameters({});
-            }
-        }
-
-        // The service requests dict improves efficiency by allowing all service
-        // requests to respond to the same topic (meaning only one subscription).
-        // The queue keys are a unique request id, and the values contain a dict:
-        // {
-        //     "result": "success"/"error"
-        //     "data": <response data>/<error message>,
-        //     "event": Event()
-        // }
-        this._serviceRequests = {};
-
-        // Generate a random ID for the service response channel for this node
-        this._serviceResponseChannel = "srv://" + randomUUID();
-        this.createSubscription(
-            this._serviceResponseChannel,
-            this._handleServiceCallback.bind(this)
-        );
-
-        // Used to terminate the node remotely
-        this.createSubscription(
-            "nv_terminate",
-            this._handleTerminateCallback.bind(this)
-        );
-
-        // The nodeInitialised promise can be used to check if the node is
-        // ready, useful when awaiting node.init() is not possible.
-        this._resolveNodeInitialisedPromise();
     }
 
     /**
