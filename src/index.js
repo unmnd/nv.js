@@ -14,7 +14,6 @@ const { promises: fs } = require("fs");
 
 const winston = require("winston");
 const Redis = require("ioredis");
-const isValidUTF8 = require("utf-8-validate");
 const os = require("os");
 
 const utils = require("./utils.js");
@@ -409,10 +408,9 @@ class Node {
      * @returns The decoded message.
      */
     _decodePubSubMessage(message) {
-        // Check the message is valid utf8
-        if (isValidUTF8(message)) {
+        try {
             return JSON.parse(message.toString());
-        } else {
+        } catch (e) {
             return message;
         }
     }
