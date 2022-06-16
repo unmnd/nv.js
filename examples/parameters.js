@@ -90,7 +90,7 @@ class ParameterExamples extends Node {
         );
 
         // You can remove all parameters from a node at once
-        await this.deleteParameters();
+        await this.deleteParameters({ nodeName: "node1" });
     }
 }
 
