@@ -6,10 +6,7 @@ class OddEvenCheckClient extends Node {
 
         // You can wait for a service to be ready using the
         // `waitForServiceReady` method
-        this.log.info("Waiting for service to be ready...");
         await this.waitForServiceReady("odd_even_check");
-
-        this.log.info("Service ready!");
 
         // Call any service using the `call_service` method The service name is
         // the first argument, the next is an array of positional arguments, and

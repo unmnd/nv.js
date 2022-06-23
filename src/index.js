@@ -879,12 +879,19 @@ class Node {
         return new Promise((resolve, reject) => {
             let timeoutFunc = null;
 
+            this.log.debug(`Waiting for service ${serviceName} to be ready...`);
+
             const interval = setInterval(async () => {
                 const services = await this.getServices();
 
                 if (serviceName in services) {
                     clearInterval(interval);
                     clearTimeout(timeoutFunc);
+
+                    this.log.debug(
+                        `Service ${serviceName} is ready!`
+                    );
+
                     resolve(true);
                 }
             }, 100);
