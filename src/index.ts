@@ -1,30 +1,29 @@
-import { readFile } from "fs/promises";
 import { randomUUID, type UUID } from "crypto";
-
-import winston from "winston";
+import { readFile } from "fs/promises";
 import Redis, { type RedisOptions } from "ioredis";
 import os from "os";
+import winston from "winston";
 
-import * as utils from "./utils.js";
-import { __version__ } from "./version.js";
 import type {
-    NodeOptions,
-    PublishableData,
-    ServiceID,
+    JsonFile,
+    MessageServiceRequest,
     MessageServiceResponse,
+    MessageTerminateNode,
+    NodeInformation,
+    NodeOptions,
+    NodePS,
+    Parameter,
+    ParameterName,
+    PublishableData,
+    ServiceCallback,
     ServiceHandler,
+    ServiceID,
+    ServiceName,
     SubscriptionCallback,
     TopicName,
-    MessageTerminateNode,
-    NodePS,
-    NodeInformation,
-    MessageServiceRequest,
-    ServiceCallback,
-    ParameterName,
-    ServiceName,
-    Parameter,
-    JsonFile,
 } from "./interface.js";
+import * as utils from "./utils.js";
+import { __version__ } from "./version.js";
 
 const PLATFORM = os.type() + " " + os.release() + " " + os.arch();
 
@@ -104,14 +103,15 @@ export abstract class Node {
 
     // Initialisation promises
     private _resolveNodeInitialisedPromise: (
-        value?: void | PromiseLike<void>
+        value?: void | PromiseLike<void>,
     ) => void = () => {};
+    /* eslint-disable  @typescript-eslint/no-explicit-any */
     private _rejectNodeInitialisedPromise: (reason?: any) => void = () => {};
     private readonly _nodeInitialised: Promise<void> = new Promise(
         (resolve, reject) => {
             this._resolveNodeInitialisedPromise = resolve;
             this._rejectNodeInitialisedPromise = reject;
-        }
+        },
     );
 
     // Initialisation parameters
@@ -196,7 +196,7 @@ export abstract class Node {
                 winston.format.json(),
                 winston.format.printf((info) => {
                     return `${info.timestamp} ${info.level}: ${info.message}`;
-                })
+                }),
             ),
             transports: [new winston.transports.Console()],
         });
@@ -213,7 +213,7 @@ export abstract class Node {
         this.log.info(
             workspace
                 ? `Using workspace ${workspace}`
-                : "No workspace specified"
+                : "No workspace specified",
         );
     }
 
@@ -232,7 +232,7 @@ export abstract class Node {
             }
 
             this.log.debug(
-                `Initialising ${this._name} using framework.js version nv ${__version__}`
+                `Initialising ${this._name} using framework.js version nv ${__version__}`,
             );
 
             // Connect redis clients
@@ -247,7 +247,7 @@ export abstract class Node {
 
             this._redis["sub"].on(
                 "messageBuffer",
-                this._handleSubscriptionCallback.bind(this)
+                this._handleSubscriptionCallback.bind(this),
             );
 
             this._redis["pub"] = await this._connectRedis(redisHost, {
@@ -276,14 +276,14 @@ export abstract class Node {
                 // Check if the node exists
                 if (await this._redis["nodes"].exists(this._name)) {
                     this.log.info(
-                        `Node ${this._name} already exists, waiting to see if it disappears...`
+                        `Node ${this._name} already exists, waiting to see if it disappears...`,
                     );
 
                     // Wait up to 10 seconds for the node to disappear
                     let nodeExists = 1;
                     for (let i = 0; i < 10; i++) {
                         nodeExists = await this._redis["nodes"].exists(
-                            this._name
+                            this._name,
                         );
                         if (nodeExists === 0) {
                             break;
@@ -311,16 +311,16 @@ export abstract class Node {
             this.createSubscription(
                 this._serviceResponseChannel,
                 this._handleServiceCallback.bind(
-                    this
-                ) as unknown as SubscriptionCallback
+                    this,
+                ) as unknown as SubscriptionCallback,
             );
 
             // Used to terminate the node remotely
             this.createSubscription(
                 "nv_terminate",
                 this._handleTerminateCallback.bind(
-                    this
-                ) as unknown as SubscriptionCallback
+                    this,
+                ) as unknown as SubscriptionCallback,
             );
 
             // The nodeInitialised promise can be used to check if the node is
@@ -345,7 +345,7 @@ export abstract class Node {
                 this._name,
                 JSON.stringify(await this.getNodeInformation()),
                 "EX",
-                10
+                10,
             );
 
             // Assigning the timer to a variable allows it to be cancelled
@@ -353,7 +353,7 @@ export abstract class Node {
             // the next loop.
             this.timeouts["renew_node_information"] = setTimeout(
                 renewNodeInformation,
-                5000
+                5000,
             );
         };
 
@@ -385,17 +385,17 @@ export abstract class Node {
      */
     private async _connectRedis(
         redisHost: string | undefined,
-        { port = 6379, db = 0 }
+        { port = 6379, db = 0 },
     ): Promise<Redis> {
         const connect = async (options: RedisOptions): Promise<Redis> => {
             this.log.debug(
-                `Connecting to redis server at ${options.host}:${options.port}`
+                `Connecting to redis server at ${options.host}:${options.port}`,
             );
             const r = new Redis({ ...options, lazyConnect: true });
             await r.connect();
 
             this.log.info(
-                `Connected to Redis server at ${options.host}:${options.port}`
+                `Connected to Redis server at ${options.host}:${options.port}`,
             );
             return r;
         };
@@ -421,7 +421,7 @@ export abstract class Node {
             });
         } catch (e) {
             this.log.warn(
-                `Could not connect to Redis at redis:${port}, trying localhost`
+                `Could not connect to Redis at redis:${port}, trying localhost`,
             );
         }
 
@@ -434,7 +434,7 @@ export abstract class Node {
             });
         } catch (e) {
             throw new Error(
-                `Could not connect to Redis at redis:${port} or localhost:${port}`
+                `Could not connect to Redis at redis:${port} or localhost:${port}`,
             );
         }
     }
@@ -478,7 +478,7 @@ export abstract class Node {
      */
     private _handleSubscriptionCallback(
         topic: TopicName,
-        message: string | Buffer
+        message: string | Buffer,
     ) {
         const callbacks = this._subscriptions[topic];
 
@@ -527,7 +527,7 @@ export abstract class Node {
     private _handleTerminateCallback(message: MessageTerminateNode) {
         if (message.node === this._name) {
             this.log.info(
-                `Node terminated remotely with reason: ${message.reason}`
+                `Node terminated remotely with reason: ${message.reason}`,
             );
             this.destroyNode();
         }
@@ -726,7 +726,7 @@ export abstract class Node {
             const node = nodes[nodeName];
 
             for (const [topic, lastPublished] of Object.entries(
-                node.publishers
+                node.publishers,
             )) {
                 // Remove service topics
                 if (topic.startsWith("srv://")) {
@@ -813,7 +813,7 @@ export abstract class Node {
         // Remove the callback from the list of callbacks for the channel
         if (this._subscriptions[topic]) {
             this._subscriptions[topic] = this._subscriptions[topic].filter(
-                (cb) => cb !== callback
+                (cb) => cb !== callback,
             );
         }
 
@@ -882,7 +882,7 @@ export abstract class Node {
         // Get all nodes currently registered
         const nodes = await this.getNodes();
 
-        return Object.entries(nodes).reduce((services, [nodeName, node]) => {
+        return Object.entries(nodes).reduce((services, [_nodeName, node]) => {
             return {
                 ...services,
                 ...node.services,
@@ -906,11 +906,9 @@ export abstract class Node {
      */
     async waitForServiceReady(
         serviceName: ServiceName,
-        timeout: number = 10000
+        timeout: number = 10000,
     ): Promise<void> {
         return new Promise((resolve, reject) => {
-            let timeoutFunc: Timer;
-
             this.log.debug(`Waiting for service ${serviceName} to be ready...`);
 
             const interval = setInterval(async () => {
@@ -926,11 +924,11 @@ export abstract class Node {
                 }
             }, 100);
 
-            timeoutFunc = setTimeout(() => {
+            const timeoutFunc = setTimeout(() => {
                 clearInterval(interval);
                 reject();
                 throw new Error(
-                    `Timeout waiting for service ${serviceName} to be ready`
+                    `Timeout waiting for service ${serviceName} to be ready`,
                 );
             }, timeout);
         });
@@ -1004,7 +1002,7 @@ export abstract class Node {
         // Register a message handler for the service
         this.createSubscription(
             serviceID,
-            handleServiceCall as unknown as SubscriptionCallback
+            handleServiceCall as unknown as SubscriptionCallback,
         );
 
         // Save the service name and ID
@@ -1028,7 +1026,7 @@ export abstract class Node {
     async callService(
         serviceName: ServiceName,
         args: PublishableData[] = [],
-        kwargs: { [key: string]: PublishableData } = {}
+        kwargs: { [key: string]: PublishableData } = {},
     ): Promise<PublishableData> {
         // Throw an error if args or kwargs are not an array or object
         if (!(args instanceof Array)) {
@@ -1053,9 +1051,9 @@ export abstract class Node {
 
         // This allows the promise to be resolved from the message callback
         this._serviceRequests[requestID].event = new Promise(
-            (resolve, reject) => {
+            (resolve, _reject) => {
                 this._serviceRequests[requestID].resolvePromise = resolve;
-            }
+            },
         );
 
         // Create a message to send to the service
@@ -1087,13 +1085,13 @@ export abstract class Node {
 
         // Format timings as durations for print
         const durations = timings.map(
-            ([key, value], i) =>
-                `${Math.round((value - timings[0][1]) * 1000)}ms (${key})`
+            ([key, value]) =>
+                `${Math.round((value - timings[0][1]) * 1000)}ms (${key})`,
         );
 
         // Print and format the cumulative timings
         this.log.debug(
-            `Service ${serviceName} timings: ${durations.join(" -> ")}`
+            `Service ${serviceName} timings: ${durations.join(" -> ")}`,
         );
 
         // Delete the request
@@ -1114,7 +1112,7 @@ export abstract class Node {
      */
     async getParameter(
         name: ParameterName,
-        nodeName: string = this._name
+        nodeName: string = this._name,
     ): Promise<PublishableData> {
         // Get the parameter from the parameter server
         const param = await this._redis["params"].get(`${nodeName}.${name}`);
@@ -1150,7 +1148,7 @@ export abstract class Node {
      */
     async getParameters(
         nodeName: string = this._name,
-        match: string = "*"
+        match: string = "*",
     ): Promise<{ [key: ParameterName]: PublishableData }> {
         const parameters: { [key: ParameterName]: PublishableData } = {};
 
@@ -1179,7 +1177,7 @@ export abstract class Node {
      */
     async getParameterDescription(
         name: ParameterName,
-        nodeName: string = this._name
+        nodeName: string = this._name,
     ): Promise<string> {
         // Get the parameter from the parameter server
         const param = await this._redis["params"].get(`${nodeName}.${name}`);
@@ -1217,14 +1215,14 @@ export abstract class Node {
         name: ParameterName,
         value: PublishableData,
         description: string = "",
-        nodeName: string = this._name
+        nodeName: string = this._name,
     ) {
         return this._redis["params"].set(
             `${nodeName}.${name}`,
             JSON.stringify({
                 value,
                 description,
-            })
+            }),
         );
     }
 
@@ -1247,7 +1245,7 @@ export abstract class Node {
             value: PublishableData;
             nodeName?: string;
             description?: string;
-        }[]
+        }[],
     ) {
         // Ensure all parameters have the required keys
         for (const parameter of parameters) {
@@ -1270,7 +1268,7 @@ export abstract class Node {
                 JSON.stringify({
                     value: parameter.value,
                     description: parameter.description,
-                } as Parameter)
+                } as Parameter),
             );
         }
 
@@ -1305,7 +1303,7 @@ export abstract class Node {
         parameters: {
             name: ParameterName;
             nodeName?: string;
-        }[]
+        }[],
     ) {
         // Create a pipe to send all updates at once
         const pipe = this._redis["params"].pipeline();
@@ -1409,7 +1407,7 @@ export abstract class Node {
         function convertToParameterList(
             parameterObject: { [key: string]: PublishableData },
             _nodeName?: string,
-            _subparams: string[] = []
+            _subparams: string[] = [],
         ): { nodeName: string; name: string; value: PublishableData }[] {
             const parameterArray = [];
 
@@ -1421,8 +1419,8 @@ export abstract class Node {
                     parameterArray.push(
                         ...convertToParameterList(
                             value as { [key: string]: PublishableData },
-                            key
-                        )
+                            key,
+                        ),
                     );
                 } else if (isObject(value)) {
                     // Recurse all parameters
@@ -1430,7 +1428,7 @@ export abstract class Node {
                         ...convertToParameterList(value, _nodeName, [
                             ..._subparams,
                             key,
-                        ])
+                        ]),
                     );
                 } else {
                     // Set the parameter
