@@ -16,6 +16,10 @@ import type {
     SubscriptionCallback,
     TopicName,
     MessageTerminateNode,
+    NodePS,
+    NodeInformation,
+    MessageServiceRequest,
+    ServiceCallback,
 } from "./interface.js";
 
 const PLATFORM = os.type() + " " + os.release() + " " + os.arch();
@@ -479,7 +483,7 @@ export abstract class Node {
 
     /**
      * Handle responses from server requests. This works similarly to
-     * _handleSubscriptionCallback, but is specific to messages received as
+     * {@link _handleSubscriptionCallback}, but is specific to messages received as
      * a response to a service request.
      *
      * @param message The message received.
@@ -557,7 +561,7 @@ export abstract class Node {
     /**
      * Get the name of this node.
      *
-     * @returns {String} The name of this node.
+     * @returns The name of this node.
      */
     getName() {
         return this._name;
@@ -593,9 +597,9 @@ export abstract class Node {
     /**
      * Get process information about the node.
      *
-     * @returns {Object} The process information.
+     * @returns The process information.
      */
-    getNodePS() {
+    getNodePS(): NodePS {
         // Get the cpu usage by calculating how many active miliseconds have
         // occured since the last check.
         const usage = process.cpuUsage(this._processUsage.cpu);
@@ -623,44 +627,52 @@ export abstract class Node {
      * no node name is provided, the information for the current node is
      * returned.
      *
-     * @param {String} [nodeName] The name of the node to get
-     * information for.
+     * @param nodeName The name of the node to get
+     * information for (defaults to the current node)
      *
-     * @return {Object} The node information dictionary.
+     * @return The node information dictionary.
      */
-    async getNodeInformation({ nodeName = null } = {}) {
-        if (nodeName === null) {
+    async getNodeInformation(nodeName?: string): Promise<NodeInformation> {
+        if (nodeName === undefined || nodeName === this._name) {
             return {
                 time_registered: this._startTime,
                 time_modified: Math.round(Date.now() / 1000),
-                version: version.__version__ + "-js",
+                version: __version__ + "-js",
                 subscriptions: Object.keys(this._subscriptions),
                 publishers: this._publishers,
                 services: this._services,
                 ps: this.getNodePS(),
             };
         } else {
-            return JSON.parse(await this._redis["nodes"].get(nodeName));
+            const nodeInfo = await this._redis["nodes"].get(nodeName);
+
+            if (nodeInfo === null) {
+                throw new Error(`Node ${nodeName} does not exist`);
+            }
+
+            return JSON.parse(nodeInfo);
         }
     }
 
     /**
      * Get all nodes present in the network.
      *
-     * @returns {Object} A dictionary of node information.
+     * @returns A dictionary of node information.
      */
-    async getNodes() {
+    async getNodes(): Promise<{
+        [key: string]: NodeInformation;
+    }> {
         const nodeNames = await this.getNodesList();
 
-        const nodes = {};
+        const nodes: {
+            [key: string]: NodeInformation;
+        } = {};
 
         for (const nodeName of nodeNames) {
-            const nodeInformation = await this.getNodeInformation({ nodeName });
-
-            // Only update if node information is returned, this prevents the
-            // error where a node is removed between the getNodesList call and here
-            if (nodeInformation != null) {
-                nodes[nodeName] = nodeInformation;
+            try {
+                nodes[nodeName] = await this.getNodeInformation(nodeName);
+            } catch (e) {
+                this.log.warn(`Error getting node information: ${e}`);
             }
         }
 
@@ -670,7 +682,7 @@ export abstract class Node {
     /**
      * Get a list of all nodes present in the network.
      *
-     * @returns {Array} A list of node names.
+     * @returns A list of node names.
      */
     async getNodesList() {
         return await this._redis["nodes"].keys("*");
@@ -679,23 +691,24 @@ export abstract class Node {
     /**
      * Check if a node with the given name exists.
      *
-     * @param {String} nodeName The name of the node to check.
+     * @param  nodeName The name of the node to check.
      *
-     * @return {Promise} A promise which resolves to true if the node exists,
-     * or false if it does not.
+     * @return True if the node exists, false otherwise.
      */
-    async checkNodeExists(nodeName) {
+    async checkNodeExists(nodeName: string) {
         return this._redis["nodes"].exists(nodeName);
     }
 
     /**
      * Get all topics present in the network.
      *
-     * @returns {Object} A dictionary containing all topics on the network, and
+     * @returns A dictionary containing all topics on the network, and
      * the time of their most recent message.
      */
     async getTopics() {
-        const topics = {};
+        const topics: {
+            [key: TopicName]: number;
+        } = {};
 
         const nodes = await this.getNodes();
 
@@ -732,11 +745,11 @@ export abstract class Node {
      * the nv cli)! If you want to include these subscribers, use
      * {@link getNumTopicSubscriptions} instead.
      *
-     * @param {String} topic The topic to get subscribers for.
+     * @param topic The topic to get subscribers for.
      *
-     * @returns {Array} A list of nodes which are subscribed to the topic.
+     * @returns A list of nodes which are subscribed to the topic.
      */
-    async getTopicSubscriptions(topic) {
+    async getTopicSubscriptions(topic: TopicName): Promise<string[]> {
         // First, get all registered nodes
         const nodes = await this.getNodes();
 
@@ -754,53 +767,52 @@ export abstract class Node {
      * Get the number of subscriptions to a specific topic,
      * including nodes which are not registered with the network.
      *
-     * @param {String} topic The topic to get the number of subscribers for.
+     * @param topic The topic to get the number of subscribers for.
      *
-     * @returns {Number} The number of subscribers to the topic.
+     * @returns The number of subscribers to the topic.
      */
-    async getNumTopicSubscriptions(topic) {
-        const subs = await this._redis["pub"].pubsub("numsub", topic);
+    async getNumTopicSubscriptions(topic: TopicName): Promise<number> {
+        const subs = await this._redis["pub"].pubsub("NUMSUB", topic);
 
-        return subs[1];
+        return subs[1] as number;
     }
 
     /**
      * Create a subscription.
      *
-     * @param {String} channel The channel to subscribe to.
-     * @param {Function} callback The callback to call when a message is
-     * received.
+     * @param topic The topic to subscribe to.
+     * @param callback The callback to call when a message is received.
      */
-    createSubscription(channel, callback) {
+    createSubscription(topic: TopicName, callback: SubscriptionCallback) {
         // Add the callback to the list of callbacks for the channel
-        if (!this._subscriptions[channel]) {
-            this._subscriptions[channel] = [];
+        if (!this._subscriptions[topic]) {
+            this._subscriptions[topic] = [];
         }
 
-        this._subscriptions[channel].push(callback);
+        this._subscriptions[topic].push(callback);
 
         // Subscribe to the channel
-        this._redis["sub"].subscribe(channel);
+        this._redis["sub"].subscribe(topic);
     }
 
     /**
      * Remove a subscription.
      *
-     * @param {String} channel The channel to unsubscribe from.
-     * @param {Function} callback The callback to remove.
+     * @param topic The channel to unsubscribe from.
+     * @param callback The callback to remove.
      */
-    destroySubscription(channel, callback) {
+    destroySubscription(topic: string, callback: SubscriptionCallback) {
         // Remove the callback from the list of callbacks for the channel
-        if (this._subscriptions[channel]) {
-            this._subscriptions[channel] = this._subscriptions[channel].filter(
+        if (this._subscriptions[topic]) {
+            this._subscriptions[topic] = this._subscriptions[topic].filter(
                 (cb) => cb !== callback
             );
         }
 
         // If there are no more callbacks for the channel, unsubscribe from it
-        if (this._subscriptions[channel].length === 0) {
-            this._redis["sub"].unsubscribe(channel);
-            delete this._subscriptions[channel];
+        if (this._subscriptions[topic].length === 0) {
+            this._redis["sub"].unsubscribe(topic);
+            delete this._subscriptions[topic];
         }
     }
 
@@ -814,11 +826,11 @@ export abstract class Node {
      *       A custom workspace can be added in the node setup or using an
      *      environment variable.
      *
-     * @param {String} topic The topic to convert.
+     * @param topic The topic to convert.
      *
-     * @returns {String} The absolute topic name.
+     * @returns The absolute topic name.
      */
-    getAbsoluteTopic(topic) {
+    getAbsoluteTopic(topic: TopicName): TopicName {
         if (topic.startsWith(".")) {
             topic = this._name + topic;
         }
@@ -833,10 +845,10 @@ export abstract class Node {
     /**
      * Publish a message to a topic.
      *
-     * @param {String} topic The topic to publish to.
-     * @param {Object} message The message to publish.
+     * @param topic The topic to publish to.
+     * @param message The message to publish.
      */
-    publish(topic, message) {
+    publish(topic: TopicName, message: PublishableData) {
         // Conver the topic name to an absolute topic name
         topic = this.getAbsoluteTopic(topic);
 
@@ -854,14 +866,16 @@ export abstract class Node {
      * Get all the services currently registered, and their topic ID used when
      * calling them.
      *
-     * @returns {Object} A dictionary of services and their topic IDs.
+     * @returns A dictionary of services and their topic IDs.
      */
     async getServices() {
         // Get all nodes currently registered
         const nodes = await this.getNodes();
 
         // Loop over each node and add their services to the list
-        const services = {};
+        const services: {
+            [key: TopicName]: ServiceID;
+        } = {};
 
         for (const nodeName in nodes) {
             const node = nodes[nodeName];
@@ -881,17 +895,20 @@ export abstract class Node {
      *  This is useful when a service is created in the same thread as the node,
      *  and the node needs to wait for the service to be ready before calling it.
      *
-     * @param {String} service The service to wait for.
-     * @param {Number} timeout The maximum amount of time to wait for the service
+     * @param serviceName The service to wait for.
+     * @param timeout The maximum amount of time to wait for the service
      * to be ready.
      *
-     * @returns {Promise} A promise which resolves to true when the service is ready.
+     * @returns A promise which resolves when the service is ready.
      *
-     * @throws {Error} If the service does not exist after the timeout.
+     * @throws If the service does not exist after the timeout.
      */
-    waitForServiceReady(serviceName, { timeout = 10000 } = {}) {
+    async waitForServiceReady(
+        serviceName: TopicName,
+        timeout: number = 10000
+    ): Promise<void> {
         return new Promise((resolve, reject) => {
-            let timeoutFunc = null;
+            let timeoutFunc: Timer;
 
             this.log.debug(`Waiting for service ${serviceName} to be ready...`);
 
@@ -904,12 +921,13 @@ export abstract class Node {
 
                     this.log.debug(`Service ${serviceName} is ready!`);
 
-                    resolve(true);
+                    resolve();
                 }
             }, 100);
 
             timeoutFunc = setTimeout(() => {
                 clearInterval(interval);
+                reject();
                 throw new Error(
                     `Timeout waiting for service ${serviceName} to be ready`
                 );
@@ -927,13 +945,12 @@ export abstract class Node {
      * @param {CallableFunction} callback The function to call when the service is
      * called.
      *
-     * @example
-     * // Create a service called "test"
+     * @example Create a service called "test"
      * node.createService("test", (a, b, c) => {
      *    return a + b + c;
      * });
      */
-    createService(serviceName, callbackFunction) {
+    createService(serviceName: TopicName, callbackFunction: ServiceCallback) {
         /**
          * Used to handle requests to call a service, and respond by publishing
          * data back on the requested topic.
@@ -941,23 +958,21 @@ export abstract class Node {
          * @param {Object} message An object containing the request id, response
          * topic, and the args and kwargs to pass to the service.
          */
-        const handleServiceCall = (message) => {
-            let data;
-
+        const handleServiceCall = async (message: MessageServiceRequest) => {
             // Update timings
-            message.timings.request_received = Date.now() / 1000;
+            message.timings.push(["request_received", Date.now() / 1000]);
 
             // Call the service
+            let data: PublishableData;
             try {
-                data = callbackFunction(...message.args, message.kwargs);
-                message.timings.request_completed = Date.now() / 1000;
+                data = await callbackFunction(...message.args, message.kwargs);
+                message.timings.push(["request_completed", Date.now() / 1000]);
             } catch (e) {
-                this.log.error(
-                    `Error handling service call: ${serviceName}\n${e}`
-                );
+                this.log.error(`Error handling service call: ${serviceName}`);
+                this.log.error(e);
                 this.publish(message.response_topic, {
                     result: "error",
-                    data: e.message,
+                    data: (e as Error).message,
                     request_id: message.request_id,
                     timings: message.timings,
                 });
@@ -983,13 +998,16 @@ export abstract class Node {
         };
 
         // Generate a unique id for the service
-        const serviceId = "srv://" + randomUUID();
+        const serviceID: ServiceID = `srv://${randomUUID()}`;
 
         // Register a message handler for the service
-        this.createSubscription(serviceId, handleServiceCall);
+        this.createSubscription(
+            serviceID,
+            handleServiceCall as unknown as SubscriptionCallback
+        );
 
         // Save the service name and ID
-        this._services[serviceName] = serviceId;
+        this._services[serviceName] = serviceID;
     }
 
     /**

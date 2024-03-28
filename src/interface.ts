@@ -20,6 +20,31 @@ export type PublishableData =
 export type TopicName = string;
 export type ServiceID = `srv://${UUID}`;
 export type SubscriptionCallback = (data: PublishableData) => void;
+export type ServiceCallback = (
+    ...args: [...PublishableData[], kwargs: { [key: string]: PublishableData }]
+) => PublishableData | Promise<PublishableData>;
+
+export type NodePS = {
+    pid: number;
+    cpu: number;
+    memory: number;
+    platform: string;
+    lang: string;
+};
+
+export type NodeInformation = {
+    time_registered: number;
+    time_modified: number;
+    version: string;
+    subscriptions: TopicName[];
+    publishers: {
+        [topic: TopicName]: number; // Last time published
+    };
+    services: {
+        [service: TopicName]: ServiceID;
+    };
+    ps: NodePS;
+};
 
 export type MessageServiceRequest = {
     timings: [string, number][];
