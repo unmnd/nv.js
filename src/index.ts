@@ -1,5 +1,5 @@
 import { readFile } from "fs/promises";
-import { randomUUID } from "crypto";
+import { randomUUID, type UUID } from "crypto";
 
 import winston from "winston";
 import Redis, { type RedisOptions } from "ioredis";
@@ -9,15 +9,18 @@ import * as utils from "./utils.js";
 import { __version__ } from "./version.js";
 import type {
     NodeOptions,
+    PublishableData,
     ServiceID,
-    ServiceRequestObject,
+    MessageServiceResponse,
+    ServiceHandler,
     SubscriptionCallback,
     TopicName,
+    MessageTerminateNode,
 } from "./interface.js";
 
 const PLATFORM = os.type() + " " + os.release() + " " + os.arch();
 
-abstract class Node {
+export abstract class Node {
     // Node properties
     private readonly _name: string;
     private readonly _startTime: number = Math.round(Date.now() / 1000);
@@ -51,8 +54,11 @@ abstract class Node {
      * requests to respond to the same topic (meaning only one subscription).
      */
     private readonly _serviceRequests: {
-        [key: ServiceID]: ServiceRequestObject;
+        [key: UUID]: ServiceHandler;
     } = {};
+
+    /** The random channel used for service responses to this node */
+    private readonly _serviceResponseChannel = "srv://" + randomUUID();
 
     /** Redis client instances */
     private _redis!: {
@@ -218,7 +224,7 @@ abstract class Node {
             }
 
             this.log.debug(
-                `Initialising ${this._name} using framework.js version nv ${version.__version__}`
+                `Initialising ${this._name} using framework.js version nv ${__version__}`
             );
 
             // Connect redis clients
@@ -293,18 +299,7 @@ abstract class Node {
                 }
             }
 
-            // The service requests dict improves efficiency by allowing all service
-            // requests to respond to the same topic (meaning only one subscription).
-            // The queue keys are a unique request id, and the values contain a dict:
-            // {
-            //     "result": "success"/"error"
-            //     "data": <response data>/<error message>,
-            //     "event": Event()
-            // }
-            this._serviceRequests = {};
-
             // Generate a random ID for the service response channel for this node
-            this._serviceResponseChannel = "srv://" + randomUUID();
             this.createSubscription(
                 this._serviceResponseChannel,
                 this._handleServiceCallback.bind(this)
@@ -328,7 +323,7 @@ abstract class Node {
     /**
      * Register the node with the network.
      */
-    async _registerNode() {
+    private async _registerNode() {
         const renewNodeInformation = async () => {
             if (!this._nodeRegistered || this._stopped) {
                 return;
@@ -350,25 +345,15 @@ abstract class Node {
             );
         };
 
-        // Register the node
-        await this._redis["nodes"].set(
-            this._name,
-            JSON.stringify(this.getNodeInformation()),
-            "EX",
-            10
-        );
-
         this._nodeRegistered = true;
+        await renewNodeInformation();
         this.log.info(`Node ${this._name} registered`);
-
-        // Renew the node information every 5 seconds
-        renewNodeInformation();
     }
 
     /**
      * Deregister the node from the network.
      */
-    _deregisterNode() {
+    private _deregisterNode() {
         this._nodeRegistered = false;
         this._redis["nodes"].del(this._name);
 
@@ -386,7 +371,7 @@ abstract class Node {
      *
      * @returns The connected Redis client.
      */
-    async _connectRedis(
+    private async _connectRedis(
         redisHost: string | undefined,
         { port = 6379, db = 0 }
     ): Promise<Redis> {
@@ -449,7 +434,7 @@ abstract class Node {
      *
      * @returns The decoded message.
      */
-    _decodePubSubMessage(message: string | Buffer) {
+    private _decodePubSubMessage(message: string | Buffer): PublishableData {
         try {
             return JSON.parse(message.toString());
         } catch (e) {
@@ -464,27 +449,26 @@ abstract class Node {
      *
      * @returns The encoded message.
      */
-    _encodePubSubMessage(message: string | Buffer) {
+    private _encodePubSubMessage(message: PublishableData): string | Buffer {
         // If the message is a buffer, don't encode it
         if (Buffer.isBuffer(message)) {
             return message;
         }
 
-        try {
-            return JSON.stringify(message);
-        } catch (e) {
-            return message;
-        }
+        return JSON.stringify(message);
     }
 
     /**
      * Handle a message received from the network.
      *
-     * @param channel The channel the message was received on.
+     * @param topic The channel the message was received on.
      * @param message The message received.
      */
-    _handleSubscriptionCallback(channel, message) {
-        const callbacks = this._subscriptions[channel];
+    private _handleSubscriptionCallback(
+        topic: TopicName,
+        message: string | Buffer
+    ) {
+        const callbacks = this._subscriptions[topic];
 
         if (callbacks) {
             callbacks.forEach((callback) => {
@@ -495,21 +479,12 @@ abstract class Node {
 
     /**
      * Handle responses from server requests. This works similarly to
-     * `_handle_subscription_callback`, but is specific to messages received as
+     * _handleSubscriptionCallback, but is specific to messages received as
      * a response to a service request.
      *
-     * Any response contains the following object:
-     * ```
-     * {
-     *     result: "success"/"error",
-     *     data: <response data>/<error message>,
-     *     request_id: <request id>
-     * }
-     * ```
-     *
-     * @param {Object} message The message to handle
+     * @param message The message received.
      */
-    _handleServiceCallback(message) {
+    private async _handleServiceCallback(message: MessageServiceResponse) {
         // Save the result
         this._serviceRequests[message.request_id].result = message.result;
 
@@ -519,7 +494,7 @@ abstract class Node {
             typeof message.data === "string" &&
             message.data.startsWith("NV_BYTES:")
         ) {
-            this._serviceRequests[message.request_id].data = this._redis[
+            this._serviceRequests[message.request_id].data = await this._redis[
                 "pub"
             ].get(message.data);
         } else {
@@ -535,11 +510,9 @@ abstract class Node {
     /**
      * Handle node termination requests.
      *
-     * @param {Object} message The message to handle.
-     * @param {String} message.node The name of the node to terminate.
-     * @param {String} message.reason The reason for termination.
+     * @param message The termination message.
      */
-    _handleTerminateCallback(message) {
+    private _handleTerminateCallback(message: MessageTerminateNode) {
         if (message.node === this._name) {
             this.log.info(
                 `Node terminated remotely with reason: ${message.reason}`
@@ -551,7 +524,7 @@ abstract class Node {
     /**
      * Handle termination signals to gracefully stop the node.
      */
-    _sigtermHandler() {
+    private _sigtermHandler() {
         this.log.info("Received program termination signal; exiting...");
         this.destroyNode();
     }
@@ -1468,5 +1441,3 @@ abstract class Node {
         return this.setParameters(parametersList);
     }
 }
-
-exports.Node = Node;
