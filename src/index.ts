@@ -1,28 +1,138 @@
-/*
-The `Node` class is the base class for all nodes in the network. It provides
-methods for communicating between different nodes and the server, as well as
-logging, parameter handling, and other things.
+import { readFile } from "fs/promises";
+import { randomUUID } from "crypto";
 
-Callum Morrison, 2022
-UNMND, Ltd.
-<callum@unmnd.com>
+import winston from "winston";
+import Redis, { type RedisOptions } from "ioredis";
+import os from "os";
 
-All Rights Reserved
-*/
+import * as utils from "./utils.js";
+import { __version__ } from "./version.js";
+import type {
+    NodeOptions,
+    ServiceID,
+    ServiceRequestObject,
+    SubscriptionCallback,
+    TopicName,
+} from "./interface.js";
 
-const { promises: fs } = require("fs");
+const PLATFORM = os.type() + " " + os.release() + " " + os.arch();
 
-const winston = require("winston");
-const Redis = require("ioredis");
-const os = require("os");
+abstract class Node {
+    // Node properties
+    private readonly _name: string;
+    private readonly _startTime: number = Math.round(Date.now() / 1000);
+    private _stopped: boolean = false;
+    private _nodeRegistered: boolean = false;
+    private _processUsage: {
+        cpu: NodeJS.CpuUsage;
+        time: number;
+    } = {
+        cpu: process.cpuUsage(),
+        time: Date.now(),
+    };
 
-const utils = require("./utils.js");
-const version = require("./version.js");
-const { randomUUID } = require("crypto");
+    /** Track which topics the node is subscribed tp */
+    private readonly _subscriptions: {
+        [key: TopicName]: SubscriptionCallback[];
+    } = {};
 
-PLATFORM = os.type() + " " + os.release() + " " + os.arch();
+    /** Track the last time a topic was published to */
+    private readonly _publishers: {
+        [key: TopicName]: number;
+    } = {};
 
-class Node {
+    /** A map of service names to their unique redis topic */
+    private readonly _services: {
+        [key: TopicName]: ServiceID;
+    } = {};
+
+    /**
+     * The service requests dict improves efficiency by allowing all service
+     * requests to respond to the same topic (meaning only one subscription).
+     */
+    private readonly _serviceRequests: {
+        [key: ServiceID]: ServiceRequestObject;
+    } = {};
+
+    /** Redis client instances */
+    private _redis!: {
+        /**
+         * The subscriptions database stores messages for communication between
+         * nodes. The key is always the topic.
+         */
+        sub: Redis;
+
+        /**
+         * The publishers database is a mirror of the subscriptions database, as
+         * ioredis does not allow subscriptions on the same client as publishing.
+         */
+        pub: Redis;
+
+        /**
+         * The parameters database stores key-value parameters to be used for each
+         * node. The key is the node_name.parameter_name.
+         */
+        params: Redis;
+
+        /**
+         * The transforms database stores transformations between frames. The key
+         * is in the form <source_frame>:<target_frame>.
+         */
+        transforms: Redis;
+
+        /**
+         * The nodes database stores up-to-date information about which nodes are
+         * active on the network. Each node is responsible for storing and keeping
+         * it's own information active.
+         */
+        nodes: Redis;
+    };
+
+    // Initialisation promises
+    private _resolveNodeInitialisedPromise: (
+        value?: void | PromiseLike<void>
+    ) => void = () => {};
+    private _rejectNodeInitialisedPromise: (reason?: any) => void = () => {};
+    private readonly _nodeInitialised: Promise<void> = new Promise(
+        (resolve, reject) => {
+            this._resolveNodeInitialisedPromise = resolve;
+            this._rejectNodeInitialisedPromise = reject;
+        }
+    );
+
+    // Initialisation parameters
+    private readonly skipRegistration: boolean;
+    private readonly keepOldParameters: boolean;
+    private readonly redisHost?: string;
+    private readonly redisPort?: number;
+
+    // Inheritable properties
+    protected readonly log: winston.Logger;
+    protected readonly workspace?: string;
+    protected readonly timeouts: {
+        [key: string]: Timer;
+    } = {};
+
+    get name(): string {
+        return this._name;
+    }
+
+    get stopped(): boolean {
+        return this._stopped;
+    }
+
+    get startTime(): number {
+        return this._startTime;
+    }
+
+    get nodeRegistered(): boolean {
+        return this._nodeRegistered;
+    }
+
+    get nodeInitialised(): Promise<void> {
+        return this._nodeInitialised;
+    }
+
     /**
      * The Node class is the main class of the nv framework. It is used to
      * handle all interaction with the framework, including initialisation of
@@ -35,34 +145,33 @@ class Node {
      * Initialise a new node by inheriting this class. Ensure you call
      * `super().init(name)` in your new node.
      *
-     * @param {String} [name] The name of the node.
-     * @param {Boolean} [skipRegistration] Whether to skip the registration of
-     *     the node with the server. This should not be used for normal nodes, but
-     *     is useful for commandline access.
-     * @param {String} [logLevel] The log level to use.
-     * @param {Boolean} [keepOldParameters] Whether to keep old parameters from
-     *     previous instances of this node.
-     * @param {String} [workspace] An optional workspace to use for topics.
-     * @param {String} [redisHost] Force the Redis host to use.
-     * @param {Number} [redisPort] Force the Redis port to use.
+     * @param nodeName The name of the node. If not provided, a random name will
+     *    be generated.
+     * @param skipRegistration Whether to skip the registration of the node with
+     *   the server. This should not be used for normal nodes, but is useful for
+     *  commandline access.
+     * @param logLevel The log level to use.
+     * @param keepOldParameters Whether to keep old parameters from previous
+     * instances of this node.
+     * @param workspace An optional workspace to use for topics.
+     * @param redisHost Force the Redis host to use.
+     * @param redisPort Force the Redis port to use.
      */
     constructor({
-        nodeName = null,
+        nodeName,
         skipRegistration = false,
-        logLevel = null,
+        logLevel,
         keepOldParameters = false,
-        workspace = null,
-        redisHost = null,
-        redisPort = null,
-    } = {}) {
+        workspace,
+        redisHost,
+        redisPort,
+    }: NodeOptions = {}) {
         // Bind callbacks to gracefully exit the node on signal
         process.on("SIGINT", this._sigtermHandler.bind(this));
         process.on("SIGTERM", this._sigtermHandler.bind(this));
 
         // Generate a random node name if none is provided
-        if (nodeName === null) {
-            nodeName = utils.generateName();
-        }
+        this._name = nodeName ?? utils.generateName();
 
         // Initialise logger
         this.log = winston.createLogger({
@@ -79,47 +188,19 @@ class Node {
         });
 
         // Initialise parameters
-        this.name = nodeName;
-        this.nodeRegistered = false;
-        this.nodeInitialised = new Promise((resolve, reject) => {
-            this._resolveNodeInitialisedPromise = resolve;
-            this._rejectNodeInitialisedPromise = reject;
-        });
         this.skipRegistration = skipRegistration;
         this.keepOldParameters = keepOldParameters;
-        this.stopped = false;
-        this._startTime = Date.now() / 1000;
         this.redisHost = redisHost;
         this.redisPort = redisPort;
 
         // Workspace used for topic names
         this.workspace = workspace || process.env.NV_WORKSPACE;
 
-        if (workspace) {
-            this.log.info(`Using workspace ${workspace}`);
-        } else {
-            this.log.info("No workspace specified");
-        }
-
-        // The subscriptions dictionary is in the form of:
-        // {
-        //   topic1: [callback1],
-        //   topic2: [callback2, callback3],
-        //   ...
-        // }
-        this._subscriptions = {};
-
-        // The publishers dict tracks each topic which has been published on
-        // in the past, and the unix timestamp of the last publish.
-        this._publishers = {};
-
-        // The services dictionary is used to keep track of exposed services, and
-        // their unique topic names for calling.
-        this._services = {};
-
-        // The timeouts object is used to keep track of timers, where they can
-        // all be stopped automatically at node termination.
-        this.timeouts = {};
+        this.log.info(
+            workspace
+                ? `Using workspace ${workspace}`
+                : "No workspace specified"
+        );
     }
 
     /**
@@ -137,92 +218,72 @@ class Node {
             }
 
             this.log.debug(
-                `Initialising ${this.name} using framework.js version nv ${version.__version__}`
+                `Initialising ${this._name} using framework.js version nv ${version.__version__}`
             );
 
             // Connect redis clients
             const redisHost = this.redisHost || process.env.NV_REDIS_HOST;
             const redisPort =
-                this.redisPort || process.env.NV_REDIS_PORT || 6379;
+                this.redisPort ?? (Number(process.env.NV_REDIS_PORT) || 6379);
 
-            this._redis = {};
-
-            // The topics database stores messages for communication between nodes.
-            // The key is always the topic.
             this._redis["sub"] = await this._connectRedis(redisHost, {
                 port: redisPort,
                 db: 0,
             });
 
-            // Handle received messages
             this._redis["sub"].on(
                 "messageBuffer",
                 this._handleSubscriptionCallback.bind(this)
             );
 
-            // There are two identical Redis instances, as ioredis does not allow
-            // subscriptions on the same client as publishing.
             this._redis["pub"] = await this._connectRedis(redisHost, {
                 port: redisPort,
                 db: 0,
             });
 
-            // The parameters database stores key-value parameters to be used for
-            // each node. The key is the node_name.parameter_name.
             this._redis["params"] = await this._connectRedis(redisHost, {
                 port: redisPort,
                 db: 1,
             });
 
-            // The transforms database stores transformations between frames. The key
-            // is in the form <source_frame>:<target_frame>.
             this._redis["transforms"] = await this._connectRedis(redisHost, {
                 port: redisPort,
                 db: 2,
             });
 
-            // The nodes database stores up-to-date information about which nodes are
-            // active on the network. Each node is responsible for storing and
-            // keeping it's own information active.
             this._redis["nodes"] = await this._connectRedis(redisHost, {
                 port: redisPort,
                 db: 3,
             });
 
-            // Assign the initial process usage for process monitoring
-            this._processUsage = {
-                cpu: process.cpuUsage(),
-                time: Date.now(),
-            };
-
             if (this.skipRegistration) {
                 this.log.warn("Skipping node registration...");
             } else {
                 // Check if the node exists
-                if (await this._redis["nodes"].exists(this.name)) {
+                if (await this._redis["nodes"].exists(this._name)) {
                     this.log.info(
-                        `Node ${this.name} already exists, waiting to see if it disappears...`
+                        `Node ${this._name} already exists, waiting to see if it disappears...`
                     );
 
                     // Wait up to 10 seconds for the node to disappear
-                    let nodeExists = true;
+                    let nodeExists = 1;
                     for (let i = 0; i < 10; i++) {
                         nodeExists = await this._redis["nodes"].exists(
-                            this.name
+                            this._name
                         );
-                        if (!nodeExists) {
+                        if (nodeExists === 0) {
                             break;
                         }
                         await utils.sleep(1000);
                     }
 
                     if (nodeExists) {
-                        throw new Error(`Node ${this.name} still exists`);
+                        throw new Error(`Node ${this._name} still exists`);
                     }
                 }
 
                 // Register the node
-                this.log.info(`Registering node ${this.name}`);
+                this.log.info(`Registering node ${this._name}`);
 
                 await this._registerNode();
 
@@ -269,12 +330,12 @@ class Node {
      */
     async _registerNode() {
         const renewNodeInformation = async () => {
-            if (!this.nodeRegistered || this.stopped) {
+            if (!this._nodeRegistered || this._stopped) {
                 return;
             }
 
             this._redis["nodes"].set(
-                this.name,
+                this._name,
                 JSON.stringify(await this.getNodeInformation()),
                 "EX",
                 10
@@ -291,14 +352,14 @@ class Node {
 
         // Register the node
         await this._redis["nodes"].set(
-            this.name,
+            this._name,
             JSON.stringify(this.getNodeInformation()),
             "EX",
             10
         );
 
-        this.nodeRegistered = true;
-        this.log.info(`Node ${this.name} registered`);
+        this._nodeRegistered = true;
+        this.log.info(`Node ${this._name} registered`);
 
         // Renew the node information every 5 seconds
         renewNodeInformation();
@@ -308,10 +369,10 @@ class Node {
      * Deregister the node from the network.
      */
     _deregisterNode() {
-        this.nodeRegistered = false;
-        this._redis["nodes"].del(this.name);
+        this._nodeRegistered = false;
+        this._redis["nodes"].del(this._name);
 
-        this.log.info(`Node ${this.name} deregistered`);
+        this.log.info(`Node ${this._name} deregistered`);
     }
 
     /**
@@ -319,95 +380,76 @@ class Node {
      * to find the host automatically on either localhost, or connecting to a
      * container named 'redis'.
      *
-     * @param {String} redisHost The host of the redis server.
-     * @param {Number} [port] The port of the redis server.
-     * @param {Number} [db] The database to connect to.
+     * @param redisHost The host of the redis server.
+     * @param port The port of the redis server.
+     * @param db The database to connect to.
      *
-     * @returns {Promise<RedisClient>} The connected Redis client.
+     * @returns The connected Redis client.
      */
-    async _connectRedis(redisHost, { port = 6379, db = 0 }) {
-        const connect = async (options) => {
+    async _connectRedis(
+        redisHost: string | undefined,
+        { port = 6379, db = 0 }
+    ): Promise<Redis> {
+        const connect = async (options: RedisOptions): Promise<Redis> => {
             this.log.debug(
                 `Connecting to redis server at ${options.host}:${options.port}`
             );
             const r = new Redis({ ...options, lazyConnect: true });
+            await r.connect();
 
-            try {
-                await r.connect();
-
-                this.log.info(
-                    `Connected to Redis server at ${options.host}:${options.port}`
-                );
-                return r;
-            } catch (e) {
-                r.disconnect();
-
-                this.log.debug(
-                    `Failed to connect to Redis server at ${options.host}:${options.port}\n${e}`
-                );
-
-                return false;
-            }
+            this.log.info(
+                `Connected to Redis server at ${options.host}:${options.port}`
+            );
+            return r;
         };
-
-        let r;
 
         // If the host is supplied, it should override any other auto-detection
         if (redisHost) {
-            r = await connect({
+            return await connect({
                 host: redisHost,
                 port: port,
                 db: db,
             });
-
-            if (r) {
-                return r;
-            } else {
-                throw new Error(
-                    `Failed to connect to Redis server at ${redisHost}:${port}`
-                );
-            }
         }
 
         // Try to connect with the hostnames 'redis' and 'localhost'
         // automatically
 
         // First try 'redis'
-        r = await connect({
-            host: "redis",
-            port: port,
-            db: db,
-        });
-
-        if (r) {
-            return r;
+        try {
+            return await connect({
+                host: "redis",
+                port: port,
+                db: db,
+            });
+        } catch (e) {
+            this.log.warn(
+                `Could not connect to Redis at redis:${port}, trying localhost`
+            );
         }
 
         // Then try 'localhost'
-        r = await connect({
-            host: "localhost",
-            port: port,
-            db: db,
-        });
-
-        if (r) {
-            return r;
+        try {
+            return await connect({
+                host: "localhost",
+                port: port,
+                db: db,
+            });
+        } catch (e) {
+            throw new Error(
+                `Could not connect to Redis at redis:${port} or localhost:${port}`
+            );
         }
-
-        // If all else fails, raise an error
-        throw new Error(
-            `Could not connect to Redis at redis:${port} or localhost:${port}`
-        );
     }
 
     /**
      * Decode a message from the network.
      *
-     * @param {*} message The message to decode.
+     * @param message The message to decode.
      *
      * @returns The decoded message.
      */
-    _decodePubSubMessage(message) {
+    _decodePubSubMessage(message: string | Buffer) {
         try {
             return JSON.parse(message.toString());
         } catch (e) {
@@ -418,11 +460,11 @@ class Node {
     /**
      * Encode a message to be sent to the network.
      *
-     * @param {*} message The message to encode.
+     * @param message The message to encode.
      *
      * @returns The encoded message.
      */
-    _encodePubSubMessage(message) {
+    _encodePubSubMessage(message: string | Buffer) {
         // If the message is a buffer, don't encode it
         if (Buffer.isBuffer(message)) {
             return message;
@@ -498,7 +540,7 @@ class Node {
      * @param {String} message.reason The reason for termination.
      */
     _handleTerminateCallback(message) {
-        if (message.node === this.name) {
+        if (message.node === this._name) {
             this.log.info(
                 `Node terminated remotely with reason: ${message.reason}`
             );
@@ -524,10 +566,9 @@ class Node {
      * When overwriting this function in a node, it should not depend on any
      * other node functions, as they will not be initialised yet.
      *
-     * @returns {Promise} A promise which resolves when the node condition is
-     *     met.
+     * @returns A promise which resolves when the node condition is met.
      */
-    async nodeCondition() {
+    protected async nodeCondition(): Promise<void> {
         return Promise.resolve();
     }
 
@@ -546,7 +587,7 @@ class Node {
      * @returns {String} The name of this node.
      */
     getName() {
-        return this.name;
+        return this._name;
     }
 
     /**
@@ -555,15 +596,15 @@ class Node {
      * This will remove the node from the network and stop the node.
      */
     destroyNode() {
-        this.log.info(`Destroying node ${this.name}`);
+        this.log.info(`Destroying node ${this._name}`);
 
         // Remove the node from the list of nodes
-        if (this.nodeRegistered) {
+        if (this._nodeRegistered) {
             this._deregisterNode();
         }
 
         // Stop any timers or services running
-        this.stopped = true;
+        this._stopped = true;
         for (const [key, t] of Object.entries(this.timeouts)) {
             this.log.debug(`Cancelling timeout: ${key}`);
             clearTimeout(t);
@@ -618,7 +659,7 @@ class Node {
         if (nodeName === null) {
             return {
                 time_registered: this._startTime,
-                time_modified: Date.now() / 1000,
+                time_modified: Math.round(Date.now() / 1000),
                 version: version.__version__ + "-js",
                 subscriptions: Object.keys(this._subscriptions),
                 publishers: this._publishers,
@@ -806,7 +847,7 @@ class Node {
      */
     getAbsoluteTopic(topic) {
         if (topic.startsWith(".")) {
-            topic = this.name + topic;
+            topic = this._name + topic;
         }
 
         if (this.workspace && !topic.startsWith(this.workspace)) {
@@ -888,9 +929,7 @@ class Node {
                     clearInterval(interval);
                     clearTimeout(timeoutFunc);
 
-                    this.log.debug(
-                        `Service ${serviceName} is ready!`
-                    );
+                    this.log.debug(`Service ${serviceName} is ready!`);
 
                     resolve(true);
                 }
@@ -1087,7 +1126,7 @@ class Node {
     async getParameter(name, { nodeName = null } = {}) {
         // If the node name is not provided, use the current node
         if (nodeName === null) {
-            nodeName = this.name;
+            nodeName = this._name;
         }
 
         // Get the parameter from the parameter server
@@ -1128,7 +1167,7 @@ class Node {
     ) {
         // If the node name is not provided, use the current node
         if (nodeName === null) {
-            nodeName = this.name;
+            nodeName = this._name;
         }
 
         const parameters = {};
@@ -1158,7 +1197,7 @@ class Node {
     async getParameterDescription(name, { nodeName = null } = {}) {
         // If the node name is not provided, use the current node
         if (nodeName === null) {
-            nodeName = this.name;
+            nodeName = this._name;
         }
 
         // Get the parameter from the parameter server
@@ -1200,7 +1239,7 @@ class Node {
     ) {
         // If the node name is not provided, use the current node
         if (nodeName === null) {
-            nodeName = this.name;
+            nodeName = this._name;
         }
 
         // Set the parameter on the parameter server
@@ -1235,7 +1274,7 @@ class Node {
         // Ensure all parameters have the required keys
         for (const parameter of parameters) {
             if (!parameter.nodeName) {
-                parameter.nodeName = this.name;
+                parameter.nodeName = this._name;
             }
 
             if (!parameter.description) {
@@ -1278,7 +1317,7 @@ class Node {
     async deleteParameter(name, { nodeName = null } = {}) {
         // If the node name is not provided, use the current node
         if (nodeName === null) {
-            nodeName = this.name;
+            nodeName = this._name;
         }
 
         // Delete the parameter from the parameter server
@@ -1301,7 +1340,7 @@ class Node {
      */
     async deleteParameters({ names = null, nodeName = null } = {}) {
         if (!nodeName) {
-            nodeName = this.name;
+            nodeName = this._name;
         }
 
         // Create a pipe to send all updates at once
@@ -1344,7 +1383,7 @@ class Node {
      */
     async loadParametersFromFile(filePath) {
         // Read the file
-        const file = await fs.readFile(filePath, { encoding: "utf8" });
+        const file = await readFile(filePath, { encoding: "utf8" });
 
         // Parse the file
         return JSON.parse(file);
