@@ -23,7 +23,8 @@ export type ParameterName = string;
 export type ServiceID = `srv://${UUID}`;
 export type SubscriptionCallback = (data: PublishableData) => void;
 export type ServiceCallback = (
-    ...args: [...PublishableData[], kwargs: { [key: string]: PublishableData }]
+    args: PublishableData[],
+    kwargs: { [key: string]: PublishableData },
 ) => PublishableData | Promise<PublishableData>;
 
 export type JsonFile = `${string}.json`;
@@ -80,7 +81,7 @@ export type MessageServiceResponse = {
 export type ServiceHandler = {
     resolvePromise: () => void;
     event: Promise<void>;
-} & MessageServiceResponse;
+} & Partial<MessageServiceResponse>;
 
 export type MessageTerminateNode = {
     /** The name of the node to terminate */

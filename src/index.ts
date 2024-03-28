@@ -65,7 +65,7 @@ export abstract class Node {
     } = {};
 
     /** The random channel used for service responses to this node */
-    private readonly _serviceResponseChannel = "srv://" + randomUUID();
+    private readonly _serviceResponseChannel: ServiceID = `srv://${randomUUID()}`;
 
     /** Redis client instances */
     private _redis!: {
@@ -238,43 +238,52 @@ export abstract class Node {
             // Connect redis clients
             const redisHost = this.redisHost || process.env.NV_REDIS_HOST;
             const redisPort =
-                this.redisPort ?? (Number(process.env.NV_REDIS_PORT) || 6379);
+                this.redisPort ?? process.env.NV_REDIS_PORT
+                    ? Number(process.env.NV_REDIS_PORT)
+                    : undefined;
 
-            this._redis["sub"] = await this._connectRedis(redisHost, {
-                port: redisPort,
-                db: 0,
+            const redisConnectionOptions = this._connectRedis({
+                ...(redisHost && { host: redisHost }),
+                ...(redisPort && { port: redisPort }),
             });
 
-            this._redis["sub"].on(
+            this._redis = {
+                sub: new Redis({
+                    ...redisConnectionOptions,
+                    db: 0, // pub/sub database
+                }),
+
+                pub: new Redis({
+                    ...redisConnectionOptions,
+                    db: 0, // pub/sub database
+                }),
+
+                params: new Redis({
+                    ...redisConnectionOptions,
+                    db: 1, // parameters database
+                }),
+
+                transforms: new Redis({
+                    ...redisConnectionOptions,
+                    db: 2, // transforms database
+                }),
+
+                nodes: new Redis({
+                    ...redisConnectionOptions,
+                    db: 3, // nodes database
+                }),
+            };
+
+            this._redis.sub.on(
                 "messageBuffer",
                 this._handleSubscriptionCallback.bind(this),
             );
-
-            this._redis["pub"] = await this._connectRedis(redisHost, {
-                port: redisPort,
-                db: 0,
-            });
-
-            this._redis["params"] = await this._connectRedis(redisHost, {
-                port: redisPort,
-                db: 1,
-            });
-
-            this._redis["transforms"] = await this._connectRedis(redisHost, {
-                port: redisPort,
-                db: 2,
-            });
-
-            this._redis["nodes"] = await this._connectRedis(redisHost, {
-                port: redisPort,
-                db: 3,
-            });
 
             if (this.skipRegistration) {
                 this.log.warn("Skipping node registration...");
             } else {
                 // Check if the node exists
-                if (await this._redis["nodes"].exists(this._name)) {
+                if (await this._redis.nodes.exists(this._name)) {
                     this.log.info(
                         `Node ${this._name} already exists, waiting to see if it disappears...`,
                     );
@@ -282,9 +291,7 @@ export abstract class Node {
                     // Wait up to 10 seconds for the node to disappear
                     let nodeExists = 1;
                     for (let i = 0; i < 10; i++) {
-                        nodeExists = await this._redis["nodes"].exists(
-                            this._name,
-                        );
+                        nodeExists = await this._redis.nodes.exists(this._name);
                         if (nodeExists === 0) {
                             break;
                         }
@@ -323,6 +330,8 @@ export abstract class Node {
                 ) as unknown as SubscriptionCallback,
             );
 
+            this.log.info(`Node ${this._name} initialised`);
+
             // The nodeInitialised promise can be used to check if the node is
             // ready, useful when awaiting node.init() is not possible.
             this._resolveNodeInitialisedPromise();
@@ -336,30 +345,27 @@ export abstract class Node {
      * Register the node with the network.
      */
     private async _registerNode() {
-        const renewNodeInformation = async () => {
-            if (!this._nodeRegistered || this._stopped) {
-                return;
-            }
-
-            this._redis["nodes"].set(
-                this._name,
-                JSON.stringify(await this.getNodeInformation()),
-                "EX",
-                10,
-            );
-
-            // Assigning the timer to a variable allows it to be cancelled
-            // immediately on shutdown, instead of waiting up to 5 seconds for
-            // the next loop.
-            this.timeouts["renew_node_information"] = setTimeout(
-                renewNodeInformation,
-                5000,
-            );
-        };
+        this.timeouts["renew_node_information"] = setInterval(
+            this._renewNodeInformation.bind(this),
+            5000,
+        );
+        this._renewNodeInformation();
 
         this._nodeRegistered = true;
-        await renewNodeInformation();
         this.log.info(`Node ${this._name} registered`);
+    }
+
+    private async _renewNodeInformation() {
+        if (!this._nodeRegistered || this._stopped) {
+            return;
+        }
+
+        this._redis.nodes.set(
+            this._name,
+            JSON.stringify(await this.getNodeInformation()),
+            "EX",
+            10,
+        );
     }
 
     /**
@@ -367,76 +373,47 @@ export abstract class Node {
      */
     private _deregisterNode() {
         this._nodeRegistered = false;
-        this._redis["nodes"].del(this._name);
+        this._redis.nodes.del(this._name);
 
         this.log.info(`Node ${this._name} deregistered`);
     }
 
     /**
-     * Connect the Redis client to the database to allow messaging. It attempts
-     * to find the host automatically on either localhost, or connecting to a
-     * container named 'redis'.
+     * Attempt to find a Redis instance automatically, or connect to a specific
+     * host if provided.
      *
-     * @param redisHost The host of the redis server.
-     * @param port The port of the redis server.
-     * @param db The database to connect to.
-     *
-     * @returns The connected Redis client.
+     * @param options The options to pass to the Redis client.
+     * @returns The confirmed working options.
      */
-    private async _connectRedis(
-        redisHost: string | undefined,
-        { port = 6379, db = 0 },
-    ): Promise<Redis> {
-        const connect = async (options: RedisOptions): Promise<Redis> => {
-            this.log.debug(
-                `Connecting to redis server at ${options.host}:${options.port}`,
-            );
-            const r = new Redis({ ...options, lazyConnect: true });
-            await r.connect();
-
-            this.log.info(
-                `Connected to Redis server at ${options.host}:${options.port}`,
-            );
-            return r;
-        };
-
-        // If the host is supplied, it should override any other auto-detection
-        if (redisHost) {
-            return await connect({
-                host: redisHost,
-                port: port,
-                db: db,
-            });
-        }
-
-        // Try to connect with the hostnames 'redis' and 'localhost'
-        // automatically
-
-        // First try 'redis'
-        try {
-            return await connect({
-                host: "redis",
-                port: port,
-                db: db,
-            });
-        } catch (e) {
-            this.log.warn(
-                `Could not connect to Redis at redis:${port}, trying localhost`,
-            );
-        }
-
-        // Then try 'localhost'
-        try {
-            return await connect({
+    private async _connectRedis(options: RedisOptions): Promise<RedisOptions> {
+        const optionsToTry = [
+            options,
+            {
                 host: "localhost",
-                port: port,
-                db: db,
-            });
-        } catch (e) {
-            throw new Error(
-                `Could not connect to Redis at redis:${port} or localhost:${port}`,
-            );
+                port: 6379,
+                ...options,
+            },
+            {
+                host: "redis",
+                port: 6379,
+                ...options,
+            },
+        ];
+
+        for (const opts of optionsToTry) {
+            try {
+                await new Redis({ ...opts, lazyConnect: true }).connect();
+                return opts;
+            } catch (e) {
+                this.log.warn(
+                    `Could not connect to Redis at ${opts.host}:${opts.port}`,
+                );
+            }
         }
+
+        throw new Error(
+            `Could not connect to Redis at any of the provided hosts`,
+        );
     }
 
     /**
@@ -581,6 +558,11 @@ export abstract class Node {
      * This will remove the node from the network and stop the node.
      */
     destroyNode() {
+        if (this._stopped) {
+            this.log.warn("Node already stopped");
+            return;
+        }
+
         this.log.info(`Destroying node ${this._name}`);
 
         // Remove the node from the list of nodes
@@ -595,11 +577,11 @@ export abstract class Node {
             clearTimeout(t);
         }
 
-        // Terminate all redis instances
-        for (const [key, r] of Object.entries(this._redis)) {
-            this.log.debug(`Closing redis instance: ${key}`);
-            r.disconnect();
-        }
+        this._redis.sub.quit();
+        this._redis.pub.quit();
+        this._redis.params.quit();
+        this._redis.transforms.quit();
+        this._redis.nodes.quit();
     }
 
     /**
@@ -652,7 +634,7 @@ export abstract class Node {
                 ps: this.getNodePS(),
             };
         } else {
-            const nodeInfo = await this._redis["nodes"].get(nodeName);
+            const nodeInfo = await this._redis.nodes.get(nodeName);
 
             if (nodeInfo === null) {
                 throw new Error(`Node ${nodeName} does not exist`);
@@ -693,7 +675,7 @@ export abstract class Node {
      * @returns A list of node names.
      */
     async getNodesList() {
-        return await this._redis["nodes"].keys("*");
+        return await this._redis.nodes.keys("*");
     }
 
     /**
@@ -704,7 +686,7 @@ export abstract class Node {
      * @return True if the node exists, false otherwise.
      */
     async checkNodeExists(nodeName: string) {
-        return this._redis["nodes"].exists(nodeName);
+        return this._redis.nodes.exists(nodeName);
     }
 
     /**
@@ -780,7 +762,7 @@ export abstract class Node {
      * @returns The number of subscribers to the topic.
      */
     async getNumTopicSubscriptions(topic: TopicName): Promise<number> {
-        const subs = await this._redis["pub"].pubsub("NUMSUB", topic);
+        const subs = await this._redis.pub.pubsub("NUMSUB", topic);
 
         return subs[1] as number;
     }
@@ -800,7 +782,10 @@ export abstract class Node {
         this._subscriptions[topic].push(callback);
 
         // Subscribe to the channel
-        this._redis["sub"].subscribe(topic);
+        this._redis.sub.subscribe(topic);
+
+        // Update node information
+        this._renewNodeInformation();
     }
 
     /**
@@ -819,9 +804,12 @@ export abstract class Node {
 
         // If there are no more callbacks for the channel, unsubscribe from it
         if (this._subscriptions[topic].length === 0) {
-            this._redis["sub"].unsubscribe(topic);
+            this._redis.sub.unsubscribe(topic);
             delete this._subscriptions[topic];
         }
+
+        // Update node information
+        this._renewNodeInformation();
     }
 
     /**
@@ -867,7 +855,7 @@ export abstract class Node {
         message = this._encodePubSubMessage(message);
 
         // Publish the message
-        this._redis["pub"].publish(topic, message);
+        this._redis.pub.publish(topic, message);
     }
 
     /**
@@ -909,6 +897,7 @@ export abstract class Node {
         timeout: number = 10000,
     ): Promise<void> {
         return new Promise((resolve, reject) => {
+            const startTime = Date.now();
             this.log.debug(`Waiting for service ${serviceName} to be ready...`);
 
             const interval = setInterval(async () => {
@@ -918,7 +907,9 @@ export abstract class Node {
                     clearInterval(interval);
                     clearTimeout(timeoutFunc);
 
-                    this.log.debug(`Service ${serviceName} is ready!`);
+                    this.log.debug(
+                        `Service ${serviceName} is ready after ${Date.now() - startTime}ms`,
+                    );
 
                     resolve();
                 }
@@ -939,6 +930,10 @@ export abstract class Node {
      *
      * A service is a function which can be called by other nodes. It can
      *  accept any number of args and kwargs, and can return most standard datatypes.
+     *
+     * @remark For large data (several bytes), it's highly recommended to send
+     * as Buffers, which uses a different transmission method which is *way*
+     * faster for large data.
      *
      * @param serviceName The name of the service.
      * @param callback The function to call when the service is
@@ -964,7 +959,7 @@ export abstract class Node {
             // Call the service
             let data: PublishableData;
             try {
-                data = await callback(...message.args, message.kwargs);
+                data = await callback(message.args, message.kwargs);
                 message.timings.push(["request_completed", Date.now() / 1000]);
             } catch (e) {
                 this.log.error(`Error handling service call: ${serviceName}`);
@@ -983,7 +978,7 @@ export abstract class Node {
             // response.
             if (Buffer.isBuffer(data)) {
                 const key = "NV_BYTES:" + randomUUID();
-                this._redis["pub"].set(key, data, "EX", 60);
+                this._redis.pub.set(key, data, "EX", 60);
                 data = key;
             }
 
@@ -1007,6 +1002,9 @@ export abstract class Node {
 
         // Save the service name and ID
         this._services[serviceName] = serviceID;
+
+        // Update node information
+        this._renewNodeInformation();
     }
 
     /**
@@ -1021,7 +1019,7 @@ export abstract class Node {
      *
      * @example
      * // Call the "test" service
-     * const result = await node.callService("test", "Hello", "World");
+     * const result = await node.callService("test", ["Hello", "World"]);
      */
     async callService(
         serviceName: ServiceName,
@@ -1050,17 +1048,17 @@ export abstract class Node {
         const requestID = randomUUID();
 
         // This allows the promise to be resolved from the message callback
-        this._serviceRequests[requestID].event = new Promise(
-            (resolve, _reject) => {
-                this._serviceRequests[requestID].resolvePromise = resolve;
-            },
-        );
+        let resolvePromise: () => void = () => {};
+        this._serviceRequests[requestID] = {
+            event: new Promise((resolve, _reject) => {
+                resolvePromise = resolve;
+            }),
+            resolvePromise,
+        };
 
         // Create a message to send to the service
-        const message = {
-            timings: {
-                start: Date.now() / 1000,
-            },
+        const message: MessageServiceRequest = {
+            timings: [["start", Date.now() / 1000]],
             response_topic: this._serviceResponseChannel,
             request_id: requestID,
             args: args,
@@ -1073,7 +1071,9 @@ export abstract class Node {
         // Wait for the response
         await this._serviceRequests[requestID].event;
 
-        const { data, timings, result } = this._serviceRequests[requestID];
+        const { data, timings, result } = this._serviceRequests[
+            requestID
+        ] as Required<ServiceHandler>; // All properties should be set after resolving
 
         // Check for errors
         if (result === "error") {
@@ -1115,7 +1115,7 @@ export abstract class Node {
         nodeName: string = this._name,
     ): Promise<PublishableData> {
         // Get the parameter from the parameter server
-        const param = await this._redis["params"].get(`${nodeName}.${name}`);
+        const param = await this._redis.params.get(`${nodeName}.${name}`);
 
         // If the parameter is not found, raise an error
         if (param === null) {
@@ -1153,7 +1153,7 @@ export abstract class Node {
         const parameters: { [key: ParameterName]: PublishableData } = {};
 
         // Get all keys which start with the node name
-        const keys = await this._redis["params"].keys(`${nodeName}.${match}`);
+        const keys = await this._redis.params.keys(`${nodeName}.${match}`);
 
         // Loop over each key and extract the parameter name and value
         for (const key of keys) {
@@ -1180,7 +1180,7 @@ export abstract class Node {
         nodeName: string = this._name,
     ): Promise<string> {
         // Get the parameter from the parameter server
-        const param = await this._redis["params"].get(`${nodeName}.${name}`);
+        const param = await this._redis.params.get(`${nodeName}.${name}`);
 
         // If the parameter is not found, raise an error
         if (param === null) {
@@ -1217,7 +1217,7 @@ export abstract class Node {
         description: string = "",
         nodeName: string = this._name,
     ) {
-        return this._redis["params"].set(
+        this._redis.params.set(
             `${nodeName}.${name}`,
             JSON.stringify({
                 value,
@@ -1259,7 +1259,7 @@ export abstract class Node {
         }
 
         // Create a pipe to send all updates at once
-        const pipe = this._redis["params"].pipeline();
+        const pipe = this._redis.params.pipeline();
 
         // Loop over each parameter and set it on the parameter server
         for (const parameter of parameters) {
@@ -1273,7 +1273,7 @@ export abstract class Node {
         }
 
         // Execute the pipe
-        return pipe.exec();
+        pipe.exec();
     }
 
     /**
@@ -1291,7 +1291,7 @@ export abstract class Node {
      * nv.deleteParameter('foo', 'node1' );
      */
     async deleteParameter(name: ParameterName, nodeName: string = this._name) {
-        return this._redis["params"].del(`${nodeName}.${name}`);
+        this._redis.params.del(`${nodeName}.${name}`);
     }
 
     /**
@@ -1306,7 +1306,7 @@ export abstract class Node {
         }[],
     ) {
         // Create a pipe to send all updates at once
-        const pipe = this._redis["params"].pipeline();
+        const pipe = this._redis.params.pipeline();
 
         // Loop over each parameter and set it for deletion
         for (const parameter of parameters) {
@@ -1318,7 +1318,7 @@ export abstract class Node {
         }
 
         // Execute the pipe
-        return pipe.exec();
+        pipe.exec();
     }
 
     /**
@@ -1328,10 +1328,10 @@ export abstract class Node {
      */
     async deleteAllParameters(nodeName: string = this._name) {
         // Get all keys which start with the node name
-        const keys = await this._redis["params"].keys(`${nodeName}.*`);
+        const keys = await this._redis.params.keys(`${nodeName}.*`);
 
         // Create a pipe to delete all keys at once
-        const pipe = this._redis["params"].pipeline();
+        const pipe = this._redis.params.pipeline();
 
         // Loop over each key and delete the parameter
         for (const key of keys) {
@@ -1339,7 +1339,7 @@ export abstract class Node {
         }
 
         // Execute the pipe
-        return pipe.exec();
+        pipe.exec();
     }
 
     /**
