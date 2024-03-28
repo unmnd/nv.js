@@ -18,11 +18,15 @@ export type PublishableData =
     | { [key: string]: PublishableData };
 
 export type TopicName = string;
+export type ServiceName = string;
+export type ParameterName = string;
 export type ServiceID = `srv://${UUID}`;
 export type SubscriptionCallback = (data: PublishableData) => void;
 export type ServiceCallback = (
     ...args: [...PublishableData[], kwargs: { [key: string]: PublishableData }]
 ) => PublishableData | Promise<PublishableData>;
+
+export type JsonFile = `${string}.json`;
 
 export type NodePS = {
     pid: number;
@@ -52,6 +56,11 @@ export type MessageServiceRequest = {
     request_id: UUID;
     args: PublishableData[];
     kwargs: { [key: string]: PublishableData };
+};
+
+export type Parameter = {
+    value: PublishableData;
+    description: string;
 };
 
 export type MessageServiceResponse = {

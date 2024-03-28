@@ -20,6 +20,10 @@ import type {
     NodeInformation,
     MessageServiceRequest,
     ServiceCallback,
+    ParameterName,
+    ServiceName,
+    Parameter,
+    JsonFile,
 } from "./interface.js";
 
 const PLATFORM = os.type() + " " + os.release() + " " + os.arch();
@@ -299,20 +303,24 @@ export abstract class Node {
 
                 // Remove residual parameters if required
                 if (!this.keepOldParameters) {
-                    await this.deleteParameters({});
+                    await this.deleteAllParameters();
                 }
             }
 
             // Generate a random ID for the service response channel for this node
             this.createSubscription(
                 this._serviceResponseChannel,
-                this._handleServiceCallback.bind(this)
+                this._handleServiceCallback.bind(
+                    this
+                ) as unknown as SubscriptionCallback
             );
 
             // Used to terminate the node remotely
             this.createSubscription(
                 "nv_terminate",
-                this._handleTerminateCallback.bind(this)
+                this._handleTerminateCallback.bind(
+                    this
+                ) as unknown as SubscriptionCallback
             );
 
             // The nodeInitialised promise can be used to check if the node is
@@ -868,24 +876,18 @@ export abstract class Node {
      *
      * @returns A dictionary of services and their topic IDs.
      */
-    async getServices() {
+    async getServices(): Promise<{
+        [key: ServiceName]: ServiceID;
+    }> {
         // Get all nodes currently registered
         const nodes = await this.getNodes();
 
-        // Loop over each node and add their services to the list
-        const services: {
-            [key: TopicName]: ServiceID;
-        } = {};
-
-        for (const nodeName in nodes) {
-            const node = nodes[nodeName];
-
-            for (const [topic, service] of Object.entries(node.services)) {
-                services[topic] = service;
-            }
-        }
-
-        return services;
+        return Object.entries(nodes).reduce((services, [nodeName, node]) => {
+            return {
+                ...services,
+                ...node.services,
+            };
+        }, {});
     }
 
     /**
@@ -900,11 +902,10 @@ export abstract class Node {
      * to be ready.
      *
      * @returns A promise which resolves when the service is ready.
-     *
      * @throws If the service does not exist after the timeout.
      */
     async waitForServiceReady(
-        serviceName: TopicName,
+        serviceName: ServiceName,
         timeout: number = 10000
     ): Promise<void> {
         return new Promise((resolve, reject) => {
@@ -941,8 +942,8 @@ export abstract class Node {
      * A service is a function which can be called by other nodes. It can
      *  accept any number of args and kwargs, and can return most standard datatypes.
      *
-     * @param {String} serviceName The name of the service.
-     * @param {CallableFunction} callback The function to call when the service is
+     * @param serviceName The name of the service.
+     * @param callback The function to call when the service is
      * called.
      *
      * @example Create a service called "test"
@@ -950,12 +951,12 @@ export abstract class Node {
      *    return a + b + c;
      * });
      */
-    createService(serviceName: TopicName, callbackFunction: ServiceCallback) {
+    createService(serviceName: ServiceName, callback: ServiceCallback) {
         /**
          * Used to handle requests to call a service, and respond by publishing
          * data back on the requested topic.
          *
-         * @param {Object} message An object containing the request id, response
+         * @param message An object containing the request id, response
          * topic, and the args and kwargs to pass to the service.
          */
         const handleServiceCall = async (message: MessageServiceRequest) => {
@@ -965,7 +966,7 @@ export abstract class Node {
             // Call the service
             let data: PublishableData;
             try {
-                data = await callbackFunction(...message.args, message.kwargs);
+                data = await callback(...message.args, message.kwargs);
                 message.timings.push(["request_completed", Date.now() / 1000]);
             } catch (e) {
                 this.log.error(`Error handling service call: ${serviceName}`);
@@ -1013,19 +1014,22 @@ export abstract class Node {
     /**
      * Call a service.
      *
-     * @param {String} serviceName The name of the service to call.
-     * @param {Array} args Positional args to pass to the service.
-     * @param {Object} kwargs Keyword args to pass to the service.
+     * @param serviceName The name of the service to call.
+     * @param args Positional args to pass to the service.
+     * @param kwargs Keyword args to pass to the service.
      *
-     * @returns {Promise} A promise which resolves to the result of the service.
-     *
-     * @throws {Error} If the service does not exist.
+     * @returns A promise which resolves to the result of the service.
+     * @throws If the service does not exist.
      *
      * @example
      * // Call the "test" service
      * const result = await node.callService("test", "Hello", "World");
      */
-    async callService(serviceName, args = [], kwargs = {}) {
+    async callService(
+        serviceName: ServiceName,
+        args: PublishableData[] = [],
+        kwargs: { [key: string]: PublishableData } = {}
+    ): Promise<PublishableData> {
         // Throw an error if args or kwargs are not an array or object
         if (!(args instanceof Array)) {
             throw new Error(`args must be an array, got ${typeof args}`);
@@ -1042,20 +1046,15 @@ export abstract class Node {
         }
 
         // Get the service ID
-        const serviceId = services[serviceName];
+        const serviceID = services[serviceName];
 
         // Generate a request ID
-        const requestId = randomUUID();
-
-        // Create the entry in the services requests object
-        this._serviceRequests[requestId] = {
-            resolvePromise: null,
-        };
+        const requestID = randomUUID();
 
         // This allows the promise to be resolved from the message callback
-        this._serviceRequests[requestId].event = new Promise(
+        this._serviceRequests[requestID].event = new Promise(
             (resolve, reject) => {
-                this._serviceRequests[requestId].resolvePromise = resolve;
+                this._serviceRequests[requestID].resolvePromise = resolve;
             }
         );
 
@@ -1065,33 +1064,31 @@ export abstract class Node {
                 start: Date.now() / 1000,
             },
             response_topic: this._serviceResponseChannel,
-            request_id: requestId,
+            request_id: requestID,
             args: args,
             kwargs: kwargs,
         };
 
         // Call the service
-        this.publish(serviceId, message);
+        this.publish(serviceID, message);
 
         // Wait for the response
-        await this._serviceRequests[requestId].event;
+        await this._serviceRequests[requestID].event;
+
+        const { data, timings, result } = this._serviceRequests[requestID];
 
         // Check for errors
-        if (this._serviceRequests[requestId].result === "error") {
-            throw new Error(this._serviceRequests[requestId].data);
+        if (result === "error") {
+            throw new Error(data);
         }
 
-        // Extract the data
-        const data = this._serviceRequests[requestId].data;
-        const timings = this._serviceRequests[requestId].timings;
-
         // Complete timings
-        timings.end = Date.now() / 1000;
+        timings.push(["end", Date.now() / 1000]);
 
         // Format timings as durations for print
-        const durations = Object.entries(timings).map(
+        const durations = timings.map(
             ([key, value], i) =>
-                `${Math.round((value - timings.start) * 1000)}ms (${key})`
+                `${Math.round((value - timings[0][1]) * 1000)}ms (${key})`
         );
 
         // Print and format the cumulative timings
@@ -1100,7 +1097,7 @@ export abstract class Node {
         );
 
         // Delete the request
-        delete this._serviceRequests[requestId];
+        delete this._serviceRequests[requestID];
 
         return data;
     }
@@ -1108,24 +1105,23 @@ export abstract class Node {
     /**
      * Get a parameter value from the parameter server.
      *
-     * @param {String} name The name of the parameter to get.
-     * @param {String} [nodeName] The name of the node to get the parameter from.
+     * @param name The name of the parameter to get.
+     * @param nodeName The name of the node to get the parameter from.
      *     If no node name is provided, the current node is used.
      *
-     * @return {Promise} A promise which resolves to the parameter value.
+     * @return The parameter value.
+     * @throws If the parameter does not exist.
      */
-    async getParameter(name, { nodeName = null } = {}) {
-        // If the node name is not provided, use the current node
-        if (nodeName === null) {
-            nodeName = this._name;
-        }
-
+    async getParameter(
+        name: ParameterName,
+        nodeName: string = this._name
+    ): Promise<PublishableData> {
         // Get the parameter from the parameter server
         const param = await this._redis["params"].get(`${nodeName}.${name}`);
 
-        // If the parameter is not found, return null
+        // If the parameter is not found, raise an error
         if (param === null) {
-            return null;
+            throw new Error(`Parameter ${name} does not exist`);
         }
 
         // Extract the value from the parameter
@@ -1135,13 +1131,12 @@ export abstract class Node {
     /**
      * Get all parameters for a specific node, matching a pattern.
      *
-     * @param {String} [nodeName] The name of the node to get parameters for.
+     * @param nodeName The name of the node to get parameters for.
      *     If no node name is provided, the current node is used.
-     * @param {String} [match] The pattern to match parameters against.
+     * @param match The pattern to match parameters against.
      *     Defaults to "*", which matches all parameters.
      *
-     * @return {Promise} A promise which resolves to a dictionary of
-     * parameters.
+     * @return An object containing all parameters for the node.
      *
      * @example
      * // Get all parameters for the current node
@@ -1154,14 +1149,10 @@ export abstract class Node {
      * const params = await nv.getParameters("node1", "foo*");
      */
     async getParameters(
-        { nodeName = null, match = "*" } = { nodeName: null, match: "*" }
-    ) {
-        // If the node name is not provided, use the current node
-        if (nodeName === null) {
-            nodeName = this._name;
-        }
-
-        const parameters = {};
+        nodeName: string = this._name,
+        match: string = "*"
+    ): Promise<{ [key: ParameterName]: PublishableData }> {
+        const parameters: { [key: ParameterName]: PublishableData } = {};
 
         // Get all keys which start with the node name
         const keys = await this._redis["params"].keys(`${nodeName}.${match}`);
@@ -1179,38 +1170,37 @@ export abstract class Node {
     /**
      * Get a parameter description from the parameter server.
      *
-     * @param {String} name The name of the parameter to get.
-     * @param {String} [nodeName] The name of the node to get the parameter from.
+     * @param name The name of the parameter to get.
+     * @param nodeName The name of the node to get the parameter from.
      *     If no node name is provided, the current node is used.
      *
-     * @return {Promise} A promise which resolves to the parameter description.
+     * @return The parameter description.
+     * @throws If the parameter does not exist.
      */
-    async getParameterDescription(name, { nodeName = null } = {}) {
-        // If the node name is not provided, use the current node
-        if (nodeName === null) {
-            nodeName = this._name;
-        }
-
+    async getParameterDescription(
+        name: ParameterName,
+        nodeName: string = this._name
+    ): Promise<string> {
         // Get the parameter from the parameter server
         const param = await this._redis["params"].get(`${nodeName}.${name}`);
 
-        // If the parameter is not found, return null
+        // If the parameter is not found, raise an error
         if (param === null) {
-            return null;
+            throw new Error(`Parameter ${name} does not exist`);
         }
 
         // Extract the value from the parameter
-        return JSON.parse(param)["description"];
+        return (JSON.parse(param) as Parameter)["description"];
     }
 
     /**
      * Set a parameter value on the parameter server.
      *
-     * @param {String} name The name of the parameter to set.
+     * @param name The name of the parameter to set.
      * @param value The value to set the parameter to.
-     * @param {String} [nodeName] The name of the node to set the parameter on.
+     * @param description The description of the parameter.
+     * @param nodeName The name of the node to set the parameter on.
      *     If no node name is provided, the current node is used.
-     * @param {String} [description] The description of the parameter.
      *
      * @example
      * // Set the parameter 'foo' to the value 'bar' on the current node
@@ -1224,16 +1214,11 @@ export abstract class Node {
      * );
      */
     async setParameter(
-        name,
-        value,
-        { nodeName = null, description = null } = {}
+        name: ParameterName,
+        value: PublishableData,
+        description: string = "",
+        nodeName: string = this._name
     ) {
-        // If the node name is not provided, use the current node
-        if (nodeName === null) {
-            nodeName = this._name;
-        }
-
-        // Set the parameter on the parameter server
         return this._redis["params"].set(
             `${nodeName}.${name}`,
             JSON.stringify({
@@ -1246,12 +1231,7 @@ export abstract class Node {
     /**
      * Set multiple parameter values on the parameter server at once.
      *
-     * @param {Object[]} parameters A list of parameter objects.
-     * @param {String} parameters[].name The name of the parameter to set.
-     * @param parameters[].value The value to set the parameter to.
-     * @param {String} [parameters[].nodeName] The name of the node to set the parameter on.
-     * If no node name is provided, the current node is used.
-     * @param {String} [parameters[].description] The description of the parameter.
+     * @param parameters A list of parameter objects.
      *
      * @example
      * // Set the parameters 'foo' and 'bar' to the values 'bar' and 'baz'
@@ -1261,7 +1241,14 @@ export abstract class Node {
      *     { name: 'bar', value: 'baz' }
      * ]);
      */
-    async setParameters(parameters) {
+    async setParameters(
+        parameters: {
+            name: ParameterName;
+            value: PublishableData;
+            nodeName?: string;
+            description?: string;
+        }[]
+    ) {
         // Ensure all parameters have the required keys
         for (const parameter of parameters) {
             if (!parameter.nodeName) {
@@ -1269,7 +1256,7 @@ export abstract class Node {
             }
 
             if (!parameter.description) {
-                parameter.description = null;
+                parameter.description = "";
             }
         }
 
@@ -1283,7 +1270,7 @@ export abstract class Node {
                 JSON.stringify({
                     value: parameter.value,
                     description: parameter.description,
-                })
+                } as Parameter)
             );
         }
 
@@ -1294,8 +1281,8 @@ export abstract class Node {
     /**
      * Delete a parameter from the parameter server.
      *
-     * @param {String} name The name of the parameter to delete.
-     * @param {String} [nodeName] The name of the node to delete the parameter from.
+     * @param name The name of the parameter to delete.
+     * @param nodeName The name of the node to delete the parameter from.
      *    If no node name is provided, the current node is used.
      *
      * @example
@@ -1303,51 +1290,55 @@ export abstract class Node {
      * nv.deleteParameter('foo');
      *
      * // Delete the parameter 'foo' from the node 'node1'
-     * nv.deleteParameter('foo', { nodeName: 'node1' });
+     * nv.deleteParameter('foo', 'node1' );
      */
-    async deleteParameter(name, { nodeName = null } = {}) {
-        // If the node name is not provided, use the current node
-        if (nodeName === null) {
-            nodeName = this._name;
-        }
-
-        // Delete the parameter from the parameter server
+    async deleteParameter(name: ParameterName, nodeName: string = this._name) {
         return this._redis["params"].del(`${nodeName}.${name}`);
     }
 
     /**
      * Delete multiple parameter values on the parameter server at once.
      *
-     * Supplying no arguments will delete all parameters on the current node.
-     * Supplying only parameter names will use the current node.
-     *
-     * @param {Array} [names] An array of parameter names to delete. If not
-     * specified, all parameters on the selected node will be deleted.
-     * @param {String} [nodeName] The name of the node to delete parameters on. If not
-     * specified, the current node will be used.
-     *
-     * @return {Promise} A promise which resolves when all the parameters have
-     * been deleted.
+     * @param parameters A list of parameter objects.
      */
-    async deleteParameters({ names = null, nodeName = null } = {}) {
-        if (!nodeName) {
-            nodeName = this._name;
-        }
-
+    async deleteParameters(
+        parameters: {
+            name: ParameterName;
+            nodeName?: string;
+        }[]
+    ) {
         // Create a pipe to send all updates at once
         const pipe = this._redis["params"].pipeline();
 
-        // If no names are specified, delete all parameters on the node
-        if (names === null) {
-            // Get all parameters on the node
-            names = await this._redis["params"].keys(`${nodeName}.*`);
-        } else {
-            // Append the node name to each parameter name
-            names = names.map((name) => `${nodeName}.${name}`);
+        // Loop over each parameter and set it for deletion
+        for (const parameter of parameters) {
+            if (!parameter.nodeName) {
+                parameter.nodeName = this._name;
+            }
+
+            pipe.del(`${parameter.nodeName}.${parameter.name}`);
         }
 
-        // Delete each parameter
-        names.forEach((name) => pipe.del(name));
+        // Execute the pipe
+        return pipe.exec();
+    }
+
+    /**
+     * Delete all parameters for a specific node.
+     *
+     * @param nodeName The name of the node to delete parameters for.
+     */
+    async deleteAllParameters(nodeName: string = this._name) {
+        // Get all keys which start with the node name
+        const keys = await this._redis["params"].keys(`${nodeName}.*`);
+
+        // Create a pipe to delete all keys at once
+        const pipe = this._redis["params"].pipeline();
+
+        // Loop over each key and delete the parameter
+        for (const key of keys) {
+            pipe.del(key);
+        }
 
         // Execute the pipe
         return pipe.exec();
@@ -1364,15 +1355,15 @@ export abstract class Node {
      * - The file must be a JSON file.
      * - No conditional statements are supported.
      *
-     * @param {String} filePath The path to the file to load.
+     * @param filePath The path to the file to load.
      *
-     * @return {Promise} A promise which resolves to an object of parameters.
+     * @return The parameters loaded from the file.
      *
      * @example
      * // Load the parameters from a file
      * const params = await nv.loadParametersFromFile('/path/to/parameters.json');
      */
-    async loadParametersFromFile(filePath) {
+    async loadParametersFromFile(filePath: JsonFile) {
         // Read the file
         const file = await readFile(filePath, { encoding: "utf8" });
 
@@ -1390,16 +1381,19 @@ export abstract class Node {
      * - The file must be a JSON file.
      * - No conditional statements are supported.
      *
-     * @param {String} filePath The path to the file to load.
-     *
-     * @return {Promise} A promise which resolves when all the parameters have
-     * been set.
+     * @param filePath The path to the file to load.
      *
      * @example
      * // Load and set the parameters from a file
      * await nv.setParametersFromFile('/path/to/parameters.json');
      */
-    async setParametersFromFile(filePath) {
+    async setParametersFromFile(filePath: JsonFile) {
+        function isObject(obj: unknown): obj is { [key: string]: unknown } {
+            return (
+                obj !== null && typeof obj === "object" && !Array.isArray(obj)
+            );
+        }
+
         /**
          * Convert a parameter dictionary read from a file, to a list of
          * parameters suitable for sending to the parameter server.
@@ -1408,33 +1402,35 @@ export abstract class Node {
          *     `subparam.param = value1`
          *     `subparam1.subparam2.param = value2`
          *
-         * @param {Object} parameterObject The parameter object to convert.
-         * @param {String} _nodeName
-         * @param {Array} _subparams
+         * @param parameterObject The parameter object to convert.
+         * @param _nodeName Used internally to track the current node name.
+         * @param _subparams Used internally to track the current subparameters.
          */
         function convertToParameterList(
-            parameterObject,
-            { _nodeName = null, _subparams = [] } = {}
-        ) {
+            parameterObject: { [key: string]: PublishableData },
+            _nodeName?: string,
+            _subparams: string[] = []
+        ): { nodeName: string; name: string; value: PublishableData }[] {
             const parameterArray = [];
 
             // Loop over each parameter
             for (const [key, value] of Object.entries(parameterObject)) {
                 // If this is the first level of the parameter, set the node name
-                if (_nodeName === null) {
+                if (_nodeName === undefined) {
                     // Recurse all parameters
                     parameterArray.push(
-                        ...convertToParameterList(value, {
-                            _nodeName: key,
-                        })
+                        ...convertToParameterList(
+                            value as { [key: string]: PublishableData },
+                            key
+                        )
                     );
-                } else if (typeof value === "object") {
+                } else if (isObject(value)) {
                     // Recurse all parameters
                     parameterArray.push(
-                        ...convertToParameterList(value, {
-                            _nodeName: _nodeName,
-                            _subparams: [..._subparams, key],
-                        })
+                        ...convertToParameterList(value, _nodeName, [
+                            ..._subparams,
+                            key,
+                        ])
                     );
                 } else {
                     // Set the parameter
