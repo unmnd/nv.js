@@ -124,7 +124,7 @@ export abstract class Node {
     protected readonly log: winston.Logger;
     protected readonly workspace?: string;
     protected readonly timeouts: {
-        [key: string]: Timer;
+        [key: string]: ReturnType<typeof setTimeout>;
     } = {};
 
     get name(): string {
