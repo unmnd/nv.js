@@ -1,19 +1,7 @@
-/*
-Extra utilities and helper functions.
-
-Callum Morrison, 2021
-UNMND, Ltd. 2021
-<callum@unmnd.com>
-
-All Rights Reserved
-*/
-
 /**
  * Generate a random human-readable name.
- *
- * @returns {String} A random name.
  */
-function generateName() {
+export function generateName(): string {
     const adjectives = [
         "defiant",
         "homeless",
@@ -418,7 +406,7 @@ function generateName() {
         "ghost",
     ];
 
-    function randomChoice(arr) {
+    function randomChoice<T>(arr: T[]) {
         const index = Math.floor(Math.random() * arr.length);
         return arr[index];
     }
@@ -429,14 +417,9 @@ function generateName() {
 /**
  * Sleep for a given number of milliseconds.
  *
- * @param {Number} duration The number of milliseconds to sleep.
- *
- * @returns {Promise} A promise that resolves after the given number of
- * milliseconds.
+ * @param duration The number of milliseconds to sleep for.
+ * @returns A promise that resolves after the given duration.
  */
-function sleep(duration) {
+export function sleep(duration: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, duration));
 }
-
-exports.generateName = generateName;
-exports.sleep = sleep;
