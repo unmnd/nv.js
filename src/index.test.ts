@@ -140,13 +140,12 @@ describe("services", async () => {
 
     test("simple service", async () => {
         await serviceClient.waitForServiceReady("example_service");
-        const result = await serviceClient.callService(
-            "example_service",
-            [1, 2, 3],
-            {
+        const result = await serviceClient.callService("example_service", {
+            args: [1, 2, 3],
+            kwargs: {
                 key: "value",
             },
-        );
+        });
         expect(result).toEqual({
             args: [1, 2, 3],
             kwargs: { key: "value" },

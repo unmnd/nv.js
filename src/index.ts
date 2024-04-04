@@ -623,11 +623,9 @@ export abstract class Node {
      *
      * @return The node information dictionary.
      */
-    async getNodeInformation({
-        nodeName = this._name,
-    }: {
-        nodeName: string;
-    }): Promise<NodeInformation> {
+    async getNodeInformation(
+        nodeName: string = this._name,
+    ): Promise<NodeInformation> {
         if (nodeName === this._name) {
             return {
                 time_registered: this._startTime,
@@ -899,7 +897,7 @@ export abstract class Node {
      */
     async waitForServiceReady(
         serviceName: ServiceName,
-        { timeout = 10000 }: { timeout: number },
+        timeout: number = 10000,
     ): Promise<void> {
         return new Promise((resolve, reject) => {
             const startTime = Date.now();
@@ -1032,9 +1030,9 @@ export abstract class Node {
             args = [],
             kwargs = {},
         }: {
-            args: PublishableData[];
-            kwargs: { [key: string]: PublishableData };
-        },
+            args?: PublishableData[];
+            kwargs?: { [key: string]: PublishableData };
+        } = {},
     ): Promise<PublishableData> {
         // Throw an error if args or kwargs are not an array or object
         if (!(args instanceof Array)) {
@@ -1122,7 +1120,7 @@ export abstract class Node {
      */
     async getParameter(
         name: ParameterName,
-        { nodeName = this._name }: { nodeName: string },
+        { nodeName = this._name }: { nodeName?: string } = {},
     ): Promise<PublishableData> {
         // Get the parameter from the parameter server
         const param = await this._redis.params.get(`${nodeName}.${name}`);
@@ -1160,9 +1158,9 @@ export abstract class Node {
         nodeName = this._name,
         match = "*",
     }: {
-        nodeName: string;
-        match: string;
-    }): Promise<{ [key: ParameterName]: PublishableData }> {
+        nodeName?: string;
+        match?: string;
+    } = {}): Promise<{ [key: ParameterName]: PublishableData }> {
         const parameters: { [key: ParameterName]: PublishableData } = {};
 
         // Get all keys which start with the node name
@@ -1190,7 +1188,7 @@ export abstract class Node {
      */
     async getParameterDescription(
         name: ParameterName,
-        { nodeName = this._name }: { nodeName: string },
+        { nodeName = this._name }: { nodeName?: string } = {},
     ): Promise<string> {
         // Get the parameter from the parameter server
         const param = await this._redis.params.get(`${nodeName}.${name}`);
@@ -1310,7 +1308,7 @@ export abstract class Node {
      */
     async deleteParameter(
         name: ParameterName,
-        { nodeName = this._name }: { nodeName: string },
+        { nodeName = this._name }: { nodeName?: string } = {},
     ) {
         this._redis.params.del(`${nodeName}.${name}`);
     }
@@ -1347,7 +1345,7 @@ export abstract class Node {
      *
      * @param nodeName The name of the node to delete parameters for.
      */
-    async deleteAllParameters({ nodeName = this._name }: { nodeName: string }) {
+    async deleteAllParameters(nodeName: string = this._name) {
         // Get all keys which start with the node name
         const keys = await this._redis.params.keys(`${nodeName}.*`);
 
