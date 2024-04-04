@@ -1,3 +1,5 @@
+import winston from "winston";
+
 /**
  * Generate a random human-readable name.
  */
@@ -422,4 +424,28 @@ export function generateName(): string {
  */
 export function sleep(duration: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, duration));
+}
+
+/**
+ * Generic logger to use outside of a node.
+ */
+export function createLogger({
+    level = "debug",
+    module = "",
+}: {
+    level?: string;
+    module?: string;
+} = {}) {
+    return winston.createLogger({
+        level: level,
+        format: winston.format.combine(
+            winston.format.timestamp({ format: "YYYY-MM-DD HH:mm:ss" }),
+            winston.format.colorize(),
+            winston.format.json(),
+            winston.format.printf((info) => {
+                return `${info.timestamp} ${info.level}${module ? ` - ${module}` : ""}: ${info.message}`;
+            }),
+        ),
+        transports: [new winston.transports.Console()],
+    });
 }

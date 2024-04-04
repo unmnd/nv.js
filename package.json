@@ -8,7 +8,8 @@
         "build": "tsc",
         "prepare": "npm run build",
         "format": "prettier --write \"src/**/*.ts\"",
-        "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix"
+        "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
+        "all": "bun run test && bun run lint && bun run format && bun run build"
     },
     "devDependencies": {
         "@types/bun": "latest",

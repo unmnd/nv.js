@@ -1,10 +1,12 @@
 import type { UUID } from "crypto";
+import type { Logger } from "winston";
 
 export interface NodeOptions {
     nodeName?: string;
     skipRegistration?: boolean;
     logLevel?: string;
     logModule?: string;
+    logger?: Logger;
     keepOldParameters?: boolean;
     workspace?: string;
     redisHost?: string;

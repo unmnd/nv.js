@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "events";
 
-import { Node } from "./index";
+import { Node } from "./node";
 
 class Subscriber extends Node {
     private emitter = new EventEmitter();
