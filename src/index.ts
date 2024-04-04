@@ -175,6 +175,7 @@ export abstract class Node {
         nodeName,
         skipRegistration = false,
         logLevel,
+        logModule,
         keepOldParameters = false,
         workspace,
         redisHost,
@@ -191,11 +192,11 @@ export abstract class Node {
         this.log = winston.createLogger({
             level: logLevel || "debug",
             format: winston.format.combine(
-                winston.format.timestamp(),
+                winston.format.timestamp({ format: "YYYY-MM-DD HH:mm:ss" }),
                 winston.format.colorize(),
                 winston.format.json(),
                 winston.format.printf((info) => {
-                    return `${info.timestamp} ${info.level}: ${info.message}`;
+                    return `${info.timestamp} ${info.level}${logModule ? ` - ${logModule}` : ""}: ${info.message}`;
                 }),
             ),
             transports: [new winston.transports.Console()],
@@ -622,8 +623,12 @@ export abstract class Node {
      *
      * @return The node information dictionary.
      */
-    async getNodeInformation(nodeName?: string): Promise<NodeInformation> {
-        if (nodeName === undefined || nodeName === this._name) {
+    async getNodeInformation({
+        nodeName = this._name,
+    }: {
+        nodeName: string;
+    }): Promise<NodeInformation> {
+        if (nodeName === this._name) {
             return {
                 time_registered: this._startTime,
                 time_modified: Math.round(Date.now() / 1000),
@@ -794,7 +799,7 @@ export abstract class Node {
      * @param topic The channel to unsubscribe from.
      * @param callback The callback to remove.
      */
-    destroySubscription(topic: string, callback: SubscriptionCallback) {
+    destroySubscription(topic: TopicName, callback: SubscriptionCallback) {
         // Remove the callback from the list of callbacks for the channel
         if (this._subscriptions[topic]) {
             this._subscriptions[topic] = this._subscriptions[topic].filter(
@@ -894,7 +899,7 @@ export abstract class Node {
      */
     async waitForServiceReady(
         serviceName: ServiceName,
-        timeout: number = 10000,
+        { timeout = 10000 }: { timeout: number },
     ): Promise<void> {
         return new Promise((resolve, reject) => {
             const startTime = Date.now();
@@ -1023,8 +1028,13 @@ export abstract class Node {
      */
     async callService(
         serviceName: ServiceName,
-        args: PublishableData[] = [],
-        kwargs: { [key: string]: PublishableData } = {},
+        {
+            args = [],
+            kwargs = {},
+        }: {
+            args: PublishableData[];
+            kwargs: { [key: string]: PublishableData };
+        },
     ): Promise<PublishableData> {
         // Throw an error if args or kwargs are not an array or object
         if (!(args instanceof Array)) {
@@ -1112,7 +1122,7 @@ export abstract class Node {
      */
     async getParameter(
         name: ParameterName,
-        nodeName: string = this._name,
+        { nodeName = this._name }: { nodeName: string },
     ): Promise<PublishableData> {
         // Get the parameter from the parameter server
         const param = await this._redis.params.get(`${nodeName}.${name}`);
@@ -1146,10 +1156,13 @@ export abstract class Node {
      * // Get all parameters for the node 'node1' matching 'foo*'
      * const params = await nv.getParameters("node1", "foo*");
      */
-    async getParameters(
-        nodeName: string = this._name,
-        match: string = "*",
-    ): Promise<{ [key: ParameterName]: PublishableData }> {
+    async getParameters({
+        nodeName = this._name,
+        match = "*",
+    }: {
+        nodeName: string;
+        match: string;
+    }): Promise<{ [key: ParameterName]: PublishableData }> {
         const parameters: { [key: ParameterName]: PublishableData } = {};
 
         // Get all keys which start with the node name
@@ -1159,7 +1172,7 @@ export abstract class Node {
         for (const key of keys) {
             const [, name] = key.split(".");
 
-            parameters[name] = await this.getParameter(name, nodeName);
+            parameters[name] = await this.getParameter(name, { nodeName });
         }
 
         return parameters;
@@ -1177,7 +1190,7 @@ export abstract class Node {
      */
     async getParameterDescription(
         name: ParameterName,
-        nodeName: string = this._name,
+        { nodeName = this._name }: { nodeName: string },
     ): Promise<string> {
         // Get the parameter from the parameter server
         const param = await this._redis.params.get(`${nodeName}.${name}`);
@@ -1214,8 +1227,13 @@ export abstract class Node {
     async setParameter(
         name: ParameterName,
         value: PublishableData,
-        description: string = "",
-        nodeName: string = this._name,
+        {
+            nodeName = this._name,
+            description = "",
+        }: {
+            nodeName?: string;
+            description?: string;
+        } = {},
     ) {
         this._redis.params.set(
             `${nodeName}.${name}`,
@@ -1290,7 +1308,10 @@ export abstract class Node {
      * // Delete the parameter 'foo' from the node 'node1'
      * nv.deleteParameter('foo', 'node1' );
      */
-    async deleteParameter(name: ParameterName, nodeName: string = this._name) {
+    async deleteParameter(
+        name: ParameterName,
+        { nodeName = this._name }: { nodeName: string },
+    ) {
         this._redis.params.del(`${nodeName}.${name}`);
     }
 
@@ -1326,7 +1347,7 @@ export abstract class Node {
      *
      * @param nodeName The name of the node to delete parameters for.
      */
-    async deleteAllParameters(nodeName: string = this._name) {
+    async deleteAllParameters({ nodeName = this._name }: { nodeName: string }) {
         // Get all keys which start with the node name
         const keys = await this._redis.params.keys(`${nodeName}.*`);
 

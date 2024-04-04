@@ -4,6 +4,7 @@ export interface NodeOptions {
     nodeName?: string;
     skipRegistration?: boolean;
     logLevel?: string;
+    logModule?: string;
     keepOldParameters?: boolean;
     workspace?: string;
     redisHost?: string;
