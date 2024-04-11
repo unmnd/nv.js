@@ -9,8 +9,7 @@
         "allowJs": true,
 
         // Bundler mode
-        "moduleResolution": "bundler",
-        "verbatimModuleSyntax": true,
+        "moduleResolution": "node",
         "outDir": "./dist",
         "declaration": true,
 

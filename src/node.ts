@@ -1,8 +1,8 @@
 import { randomUUID, type UUID } from "crypto";
 import { readFile } from "fs/promises";
 import Redis, { type RedisOptions } from "ioredis";
-import os from "os";
-import winston from "winston";
+import * as os from "os";
+import * as winston from "winston";
 
 import type {
     JsonFile,

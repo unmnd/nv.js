@@ -1,4 +1,4 @@
-import winston from "winston";
+import * as winston from "winston";
 
 /**
  * Generate a random human-readable name.
