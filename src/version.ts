@@ -1,11 +1,1 @@
-import { readFileSync } from "fs";
-
-export const __version__ = JSON.parse(
-    readFileSync(
-        __dirname +
-            (process.env.NODE_ENV === "production"
-                ? "/../../package.json"
-                : "/../package.json"),
-        "utf8",
-    ),
-).version;
+export const __version__ = process.env.npm_package_version;
